@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alpaca Trading Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header class="market-status-bar">
+      <div class="status-indicator">
+        <span class="status-dot" id="status-dot"></span>
+        <span class="status-text" id="market-status">Loading...</span>
+      </div>
+      <div class="status-time">
+        <span class="label">Next:</span>
+        <span class="value" id="next-market">--</span>
+      </div>
+      <div class="connection-status">
+        <span class="ws-dot" id="ws-dot"></span>
+        <span id="ws-status">Connecting...</span>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel account-panel">
+        <div class="panel-header">
+          <h2>Account Overview</h2>
+          <span class="badge" id="account-status">--</span>
+        </div>
+        <div class="panel-content">
+          <div class="account-stats">
+            <div class="stat-item">
+              <span class="stat-label">Equity</span>
+              <span class="stat-value" id="account-equity">--</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Buying Power</span>
+              <span class="stat-value" id="buying-power">--</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Cash</span>
+              <span class="stat-value" id="cash-balance">--</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Portfolio Value</span>
+              <span class="stat-value" id="portfolio-value">--</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Day P&L</span>
+              <span class="stat-value" id="day-pnl">--</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="panel-header">
+          <div class="chart-controls">
+            <input type="text" id="chart-symbol" value="SPY" placeholder="Symbol">
+            <div class="timeframe-selector">
+              <button class="tf-btn active" data-tf="1D">1D</button>
+              <button class="tf-btn" data-tf="5D">5D</button>
+              <button class="tf-btn" data-tf="1M">1M</button>
+              <button class="tf-btn" data-tf="3M">3M</button>
+              <button class="tf-btn" data-tf="1Y">1Y</button>
+            </div>
+          </div>
+          <div class="chart-price">
+            <span class="current-price" id="chart-price">--</span>
+            <span class="price-change" id="chart-change">--</span>
+          </div>
+        </div>
+        <div class="panel-content">
+          <div id="chart-container"></div>
+        </div>
+      </section>
+
+      <section class="panel watchlist-panel">
+        <div class="panel-header">
+          <h2>Watchlist</h2>
+          <div class="watchlist-input">
+            <input type="text" id="watchlist-add" placeholder="Add symbol..." maxlength="5">
+            <button class="add-btn" id="add-symbol-btn">+</button>
+          </div>
+        </div>
+        <div class="panel-content">
+          <table class="data-table watchlist-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Bid</th>
+                <th>Ask</th>
+                <th>Last</th>
+                <th>Chg%</th>
+              </tr>
+            </thead>
+            <tbody id="watchlist-body">
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel positions-panel">
+        <div class="panel-header">
+          <h2>Positions</h2>
+          <button class="refresh-btn" id="refresh-positions">Refresh</button>
+        </div>
+        <div class="panel-content">
+          <table class="data-table positions-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Avg Entry</th>
+                <th>Current</th>
+                <th>Market Value</th>
+                <th>Unrealized P&L</th>
+                <th>P&L%</th>
+              </tr>
+            </thead>
+            <tbody id="positions-body">
+              <tr class="empty-row">
+                <td colspan="7">No open positions</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel orders-panel">
+        <div class="panel-header">
+          <h2>Orders</h2>
+          <button class="refresh-btn" id="refresh-orders">Refresh</button>
+        </div>
+        <div class="panel-content">
+          <table class="data-table orders-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th>Qty</th>
+                <th>Filled</th>
+                <th>Limit</th>
+                <th>Status</th>
+                <th>Submitted</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="orders-body">
+              <tr class="empty-row">
+                <td colspan="9">No recent orders</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel order-ticket-panel">
+        <div class="panel-header">
+          <h2>Place Order</h2>
+        </div>
+        <div class="panel-content">
+          <form id="order-form" class="order-form">
+            <div class="form-row">
+              <label>Symbol</label>
+              <input type="text" id="order-symbol" placeholder="AAPL" maxlength="5" required>
+            </div>
+            <div class="form-row side-selector">
+              <button type="button" class="side-btn buy active" data-side="buy">BUY</button>
+              <button type="button" class="side-btn sell" data-side="sell">SELL</button>
+            </div>
+            <div class="form-row">
+              <label>Type</label>
+              <select id="order-type">
+                <option value="market">Market</option>
+                <option value="limit">Limit</option>
+              </select>
+            </div>
+            <div class="form-row limit-price-row hidden">
+              <label>Limit Price</label>
+              <input type="number" id="limit-price" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-row">
+              <label>Quantity</label>
+              <input type="number" id="order-qty" min="1" value="1" required>
+            </div>
+            <div class="form-row">
+              <label>Time in Force</label>
+              <select id="time-in-force">
+                <option value="day">Day</option>
+                <option value="gtc">GTC</option>
+              </select>
+            </div>
+            <div class="order-preview">
+              <div class="preview-row">
+                <span>Estimated:</span>
+                <span id="order-estimate">$0.00</span>
+              </div>
+            </div>
+            <button type="submit" class="submit-btn">Submit Order</button>
+            <div class="order-feedback" id="order-feedback"></div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
