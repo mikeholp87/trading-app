@@ -429,6 +429,49 @@ body {
   font-weight: 600;
 }
 
+/* Indicator Panel */
+.indicator-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.indicator-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ind-btn {
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: var(--radius-sm);
+}
+
+.ind-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.ind-btn.active {
+  background: rgba(0, 212, 255, 0.15);
+  color: var(--accent);
+  border-color: var(--accent-glow);
+}
+
 .chart-price {
   display: flex;
   align-items: baseline;
@@ -633,6 +676,30 @@ body {
 .watchlist-row .symbol-cell {
   font-weight: 600;
   color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.remove-wl-btn {
+  display: none;
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.remove-wl-btn:hover {
+  color: #ff3d5a;
+  background: rgba(255, 61, 90, 0.15);
+}
+
+.watchlist-row:hover .remove-wl-btn {
+  display: inline-block;
 }
 
 /* Orders table */

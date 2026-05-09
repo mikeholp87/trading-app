@@ -16,6 +16,27 @@ let state = {
   candlestickSeries: null,
   volumeSeries: null,
   emaSeries: null,
+  // Indicator series
+  rsiSeries: null,
+  macdLineSeries: null,
+  macdSignalSeries: null,
+  macdHistogramSeries: null,
+  bbUpperSeries: null,
+  bbMiddleSeries: null,
+  bbLowerSeries: null,
+  ema50Series: null,
+  volumeMaSeries: null,
+  // Indicator state
+  indicators: {
+    rsi: false,
+    macd: false,
+    bollingerBands: false,
+    ema50: false,
+    volumeMa: false
+  },
+  // Indicator panes (for separate oscillators)
+  rsiPane: null,
+  macdPane: null,
   ws: null,
   loadingMore: false,
   chartDataStart: null,
@@ -647,6 +668,26 @@ const initChart = () => {
     state.volumeSeries = null;
     state.emaSeries = null;
 
+    // Reset indicator series references
+    state.rsiSeries = null;
+    state.macdLineSeries = null;
+    state.macdSignalSeries = null;
+    state.macdHistogramSeries = null;
+    state.bbUpperSeries = null;
+    state.bbMiddleSeries = null;
+    state.bbLowerSeries = null;
+    state.ema50Series = null;
+    state.volumeMaSeries = null;
+    state.rsiPane = null;
+    state.macdPane = null;
+
+    // Reset indicator state
+    state.indicators.rsi = false;
+    state.indicators.macd = false;
+    state.indicators.bollingerBands = false;
+    state.indicators.ema50 = false;
+    state.indicators.volumeMa = false;
+
     // Create series based on current chart type
     createSeriesForType(state.chartType);
 
@@ -800,6 +841,9 @@ const switchChartType = async (newType) => {
   })).filter(d => d.value !== null);
   state.emaSeries.setData(emaData);
 
+  // Re-apply indicator data
+  updateIndicatorData();
+
   state.chart.timeScale().fitContent();
   console.log('[Chart] Switched to', newType);
 };
@@ -829,6 +873,9 @@ const updateChart = (bars, timeframe) => {
   
   state.emaSeries.setData(emaData);
   
+  // Update indicator data
+  updateIndicatorData();
+
   state.chart.timeScale().fitContent();
 
   // Track data bounds for infinite scroll
@@ -902,6 +949,9 @@ const loadMoreOnScroll = async (range) => {
         })).filter(d => d.value !== null);
         state.emaSeries.setData(emaData);
 
+        // Update indicator data
+        updateIndicatorData();
+
         state.chartDataStart = newBars[0].time;
 
         console.log('[Chart] Loaded', newBars.length, 'older bars. Total:', state.rawBars.length);
@@ -959,6 +1009,9 @@ const loadMoreOnScroll = async (range) => {
           value: ema20[i] || null
         })).filter(d => d.value !== null);
         state.emaSeries.setData(emaData);
+
+        // Update indicator data
+        updateIndicatorData();
 
         state.chartDataEnd = newBars[newBars.length - 1].time;
         console.log('[Chart] Loaded', newBars.length, 'newer bars. Total:', state.rawBars.length);
@@ -1116,6 +1169,470 @@ const calculateEMA = (prices, period) => {
   return ema;
 };
 
+// === Indicator Calculation Functions ===
+
+// RSI (Relative Strength Index) - 14 period
+const calculateRSI = (closes, period = 14) => {
+  const rsi = [];
+  const gains = [];
+  const losses = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    if (i === 0) {
+      gains.push(0);
+      losses.push(0);
+      rsi.push(null);
+      continue;
+    }
+    const change = closes[i] - closes[i - 1];
+    gains.push(change > 0 ? change : 0);
+    losses.push(change < 0 ? -change : 0);
+
+    if (i < period) {
+      rsi.push(null);
+    } else {
+      const avgGain = gains.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
+      const avgLoss = losses.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
+      if (avgLoss === 0) {
+        rsi.push(100);
+      } else {
+        const rs = avgGain / avgLoss;
+        rsi.push(100 - (100 / (1 + rs)));
+      }
+    }
+  }
+  return rsi;
+};
+
+// MACD - returns { macdLine, signalLine, histogram }
+const calculateMACD = (closes, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) => {
+  const fastEMA = calculateEMA(closes, fastPeriod);
+  const slowEMA = calculateEMA(closes, slowPeriod);
+
+  const macdLine = [];
+  const signalLine = [];
+  const histogram = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    if (fastEMA[i] === null || slowEMA[i] === null) {
+      macdLine.push(null);
+      signalLine.push(null);
+      histogram.push(null);
+    } else {
+      macdLine.push(fastEMA[i] - slowEMA[i]);
+    }
+  }
+
+  // Calculate signal line (9-period EMA of MACD line)
+  const signalEMA = calculateEMAWithNull(macdLine, signalPeriod);
+  for (let i = 0; i < closes.length; i++) {
+    signalLine.push(signalEMA[i]);
+    if (macdLine[i] !== null && signalEMA[i] !== null) {
+      histogram.push(macdLine[i] - signalEMA[i]);
+    } else {
+      histogram.push(null);
+    }
+  }
+
+  return { macdLine, signalLine, histogram };
+};
+
+// EMA that handles null values
+const calculateEMAWithNull = (values, period) => {
+  const result = [];
+  let ema = null;
+  let count = 0;
+
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] === null) {
+      result.push(null);
+      continue;
+    }
+
+    count++;
+    if (count === 1) {
+      ema = values[i];
+    } else {
+      const multiplier = 2 / (period + 1);
+      ema = (values[i] - ema) * multiplier + ema;
+    }
+
+    result.push(count >= period ? ema : null);
+  }
+
+  return result;
+};
+
+// Bollinger Bands - returns { upper, middle, lower }
+const calculateBollingerBands = (closes, period = 20, stdDev = 2) => {
+  const sma = [];
+  const upper = [];
+  const lower = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    if (i < period - 1) {
+      sma.push(null);
+      upper.push(null);
+      lower.push(null);
+      continue;
+    }
+
+    const slice = closes.slice(i - period + 1, i + 1);
+    const mean = slice.reduce((a, b) => a + b, 0) / period;
+    const variance = slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / period;
+    const std = Math.sqrt(variance);
+
+    sma.push(mean);
+    upper.push(mean + stdDev * std);
+    lower.push(mean - stdDev * std);
+  }
+
+  return { upper, middle: sma, lower };
+};
+
+// SMA for volumes
+const calculateVolumeSMA = (volumes, period = 20) => {
+  const sma = [];
+  for (let i = 0; i < volumes.length; i++) {
+    if (i < period - 1) {
+      sma.push(null);
+    } else {
+      const slice = volumes.slice(i - period + 1, i + 1);
+      sma.push(slice.reduce((a, b) => a + b, 0) / period);
+    }
+  }
+  return sma;
+};
+
+// === Indicator Toggle Functions ===
+
+const toggleIndicator = (indicatorName) => {
+  if (!state.chart || state.rawBars.length === 0) return;
+
+  const enabled = !state.indicators[indicatorName];
+  state.indicators[indicatorName] = enabled;
+
+  // Update button state
+  const btn = document.querySelector(`[data-indicator="${indicatorName}"]`);
+  if (btn) {
+    btn.classList.toggle('active', enabled);
+  }
+
+  // Add or remove the indicator
+  switch (indicatorName) {
+    case 'rsi':
+      toggleRSI(enabled);
+      break;
+    case 'macd':
+      toggleMACD(enabled);
+      break;
+    case 'bollingerBands':
+      toggleBollingerBands(enabled);
+      break;
+    case 'ema50':
+      toggleEMA50(enabled);
+      break;
+    case 'volumeMa':
+      toggleVolumeMA(enabled);
+      break;
+  }
+};
+
+// Remove all indicator series safely
+const removeAllIndicators = () => {
+  const seriesMap = [
+    'rsiSeries', 'rsiPane',
+    'macdHistogramSeries', 'macdLineSeries', 'macdSignalSeries', 'macdPane',
+    'bbUpperSeries', 'bbMiddleSeries', 'bbLowerSeries',
+    'ema50Series', 'volumeMaSeries'
+  ];
+  seriesMap.forEach(key => {
+    if (state[key]) {
+      try { state.chart.removeSeries(state[key]); } catch(e) {}
+      state[key] = null;
+    }
+  });
+};
+
+const toggleRSI = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    // Remove existing if any
+    if (state.rsiSeries) {
+      try { state.chart.removeSeries(state.rsiSeries); } catch(e) {}
+      state.rsiSeries = null;
+    }
+
+    // Create RSI series with its own price scale (right side)
+    state.rsiSeries = state.chart.addLineSeries({
+      color: '#e040fb',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      scaleMargins: { top: 0.75, bottom: 0.05 }
+    });
+
+    const closes = state.rawBars.map(b => b.close);
+    const rsiData = calculateRSI(closes, 14);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: rsiData[i],
+      color: rsiData[i] > 70 ? '#ef4444' : rsiData[i] < 30 ? '#10b981' : '#e040fb'
+    })).filter(d => d.value !== null);
+    state.rsiSeries.setData(data);
+  } else {
+    if (state.rsiSeries) {
+      try { state.chart.removeSeries(state.rsiSeries); } catch(e) {}
+      state.rsiSeries = null;
+    }
+  }
+};
+
+const toggleMACD = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    // Clean up existing
+    ['macdHistogramSeries', 'macdLineSeries', 'macdSignalSeries'].forEach(k => {
+      if (state[k]) { try { state.chart.removeSeries(state[k]); } catch(e) {} state[k] = null; }
+    });
+
+    // MACD histogram
+    state.macdHistogramSeries = state.chart.addHistogramSeries({
+      color: '#00d4ff',
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      scaleMargins: { top: 0.85, bottom: 0.1 }
+    });
+
+    // MACD line
+    state.macdLineSeries = state.chart.addLineSeries({
+      color: '#3b82f6',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      scaleMargins: { top: 0.85, bottom: 0.1 }
+    });
+
+    // Signal line
+    state.macdSignalSeries = state.chart.addLineSeries({
+      color: '#f97316',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      scaleMargins: { top: 0.85, bottom: 0.1 }
+    });
+
+    const closes = state.rawBars.map(b => b.close);
+    const macd = calculateMACD(closes);
+
+    const histogramData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: macd.histogram[i],
+      color: macd.histogram[i] >= 0 ? 'rgba(16, 185, 129, 0.7)' : 'rgba(239, 68, 68, 0.7)'
+    })).filter(d => d.value !== null);
+    state.macdHistogramSeries.setData(histogramData);
+
+    const lineData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: macd.macdLine[i]
+    })).filter(d => d.value !== null);
+    state.macdLineSeries.setData(lineData);
+
+    const signalData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: macd.signalLine[i]
+    })).filter(d => d.value !== null);
+    state.macdSignalSeries.setData(signalData);
+  } else {
+    ['macdHistogramSeries', 'macdLineSeries', 'macdSignalSeries'].forEach(k => {
+      if (state[k]) { try { state.chart.removeSeries(state[k]); } catch(e) {} state[k] = null; }
+    });
+  }
+};
+
+const toggleBollingerBands = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    ['bbUpperSeries', 'bbMiddleSeries', 'bbLowerSeries'].forEach(k => {
+      if (state[k]) { try { state.chart.removeSeries(state[k]); } catch(e) {} state[k] = null; }
+    });
+
+    const closes = state.rawBars.map(b => b.close);
+    const bb = calculateBollingerBands(closes, 20, 2);
+
+    state.bbUpperSeries = state.chart.addLineSeries({
+      color: 'rgba(168, 85, 247, 0.6)',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    state.bbMiddleSeries = state.chart.addLineSeries({
+      color: 'rgba(168, 85, 247, 0.9)',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    state.bbLowerSeries = state.chart.addLineSeries({
+      color: 'rgba(168, 85, 247, 0.6)',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    state.bbUpperSeries.setData(state.rawBars.map((b, i) => ({ time: b.time, value: bb.upper[i] })).filter(d => d.value !== null));
+    state.bbMiddleSeries.setData(state.rawBars.map((b, i) => ({ time: b.time, value: bb.middle[i] })).filter(d => d.value !== null));
+    state.bbLowerSeries.setData(state.rawBars.map((b, i) => ({ time: b.time, value: bb.lower[i] })).filter(d => d.value !== null));
+  } else {
+    ['bbUpperSeries', 'bbMiddleSeries', 'bbLowerSeries'].forEach(k => {
+      if (state[k]) { try { state.chart.removeSeries(state[k]); } catch(e) {} state[k] = null; }
+    });
+  }
+};
+
+const toggleEMA50 = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    if (state.ema50Series) { try { state.chart.removeSeries(state.ema50Series); } catch(e) {} state.ema50Series = null; }
+
+    state.ema50Series = state.chart.addLineSeries({
+      color: '#a855f7',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    const closes = state.rawBars.map(b => b.close);
+    const ema50 = calculateEMA(closes, 50);
+    state.ema50Series.setData(state.rawBars.map((b, i) => ({ time: b.time, value: ema50[i] })).filter(d => d.value !== null));
+  } else {
+    if (state.ema50Series) { try { state.chart.removeSeries(state.ema50Series); } catch(e) {} state.ema50Series = null; }
+  }
+};
+
+const toggleVolumeMA = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    if (state.volumeMaSeries) { try { state.chart.removeSeries(state.volumeMaSeries); } catch(e) {} state.volumeMaSeries = null; }
+
+    state.volumeMaSeries = state.chart.addLineSeries({
+      color: '#facc15',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    const volumes = state.rawBars.map(b => b.volume || 0);
+    const volMa = calculateVolumeSMA(volumes, 20);
+    state.volumeMaSeries.setData(state.rawBars.map((b, i) => ({ time: b.time, value: volMa[i] })).filter(d => d.value !== null));
+  } else {
+    if (state.volumeMaSeries) { try { state.chart.removeSeries(state.volumeMaSeries); } catch(e) {} state.volumeMaSeries = null; }
+  }
+};
+
+
+// Update indicator data when chart is updated
+const updateIndicatorData = () => {
+  if (state.rawBars.length === 0) return;
+
+  const closes = state.rawBars.map(b => b.close);
+
+  // Update RSI
+  if (state.rsiSeries && state.indicators.rsi) {
+    const rsiData = calculateRSI(closes, 14);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: rsiData[i],
+      color: rsiData[i] > 70 ? '#ef4444' : rsiData[i] < 30 ? '#10b981' : '#e040fb'
+    })).filter(d => d.value !== null);
+    state.rsiSeries.setData(data);
+  }
+
+  // Update MACD
+  if (state.macdLineSeries && state.indicators.macd) {
+    const macd = calculateMACD(closes);
+
+    const histogramData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: macd.histogram[i],
+      color: macd.histogram[i] >= 0 ? 'rgba(16, 185, 129, 0.7)' : 'rgba(239, 68, 68, 0.7)'
+    })).filter(d => d.value !== null);
+    state.macdHistogramSeries.setData(histogramData);
+
+    const lineData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: macd.macdLine[i]
+    })).filter(d => d.value !== null);
+    state.macdLineSeries.setData(lineData);
+
+    const signalData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: macd.signalLine[i]
+    })).filter(d => d.value !== null);
+    state.macdSignalSeries.setData(signalData);
+  }
+
+  // Update Bollinger Bands
+  if (state.bbUpperSeries && state.indicators.bollingerBands) {
+    const bb = calculateBollingerBands(closes, 20, 2);
+
+    const upperData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: bb.upper[i]
+    })).filter(d => d.value !== null);
+    state.bbUpperSeries.setData(upperData);
+
+    const middleData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: bb.middle[i]
+    })).filter(d => d.value !== null);
+    state.bbMiddleSeries.setData(middleData);
+
+    const lowerData = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: bb.lower[i]
+    })).filter(d => d.value !== null);
+    state.bbLowerSeries.setData(lowerData);
+  }
+
+  // Update EMA 50
+  if (state.ema50Series && state.indicators.ema50) {
+    const ema50 = calculateEMA(closes, 50);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: ema50[i]
+    })).filter(d => d.value !== null);
+    state.ema50Series.setData(data);
+  }
+
+  // Update Volume MA
+  if (state.volumeMaSeries && state.indicators.volumeMa) {
+    const volumes = state.rawBars.map(b => b.volume);
+    const sma = calculateVolumeSMA(volumes, 20);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: sma[i]
+    })).filter(d => d.value !== null);
+    state.volumeMaSeries.setData(data);
+  }
+};
+
+// Disable all indicators (used when reinitializing chart)
+const disableAllIndicators = () => {
+  Object.keys(state.indicators).forEach(key => {
+    if (state.indicators[key]) {
+      toggleIndicator(key);
+    }
+  });
+};
+
 const renderAccount = () => {
   if (!state.account) return;
   
@@ -1183,12 +1700,12 @@ const renderClock = () => {
 const renderWatchlist = () => {
   const tbody = document.getElementById('watchlist-body');
   tbody.innerHTML = '';
-  
+
   const positionsBySymbol = {};
   state.positions.forEach(p => {
     positionsBySymbol[p.symbol] = true;
   });
-  
+
   state.watchlist.forEach(symbol => {
     const quote = state.watchlistQuotes[symbol] || {};
     const hasPosition = positionsBySymbol[symbol];
@@ -1196,7 +1713,8 @@ const renderWatchlist = () => {
     const row = document.createElement('tr');
     row.className = 'watchlist-row' + (hasPosition ? ' has-position' : '');
     row.dataset.symbol = symbol;
-    row.onclick = () => {
+    row.onclick = (e) => {
+      if (e.target.classList.contains('remove-wl-btn')) return;
       state.currentSymbol = symbol;
       document.getElementById('chart-symbol').value = symbol;
       loadChart(symbol, state.timeframe);
@@ -1208,7 +1726,10 @@ const renderWatchlist = () => {
     const ask = quote.ask || 0;
     
     row.innerHTML = `
-      <td class="symbol-cell">${symbol}</td>
+      <td class="symbol-cell">
+        <span class="remove-wl-btn" data-symbol="${symbol}" title="Remove">&times;</span>
+        ${symbol}
+      </td>
       <td>${bid ? formatNumber(bid, 2) : '--'}</td>
       <td>${ask ? formatNumber(ask, 2) : '--'}</td>
       <td>${last ? formatNumber(last, 2) : '--'}</td>
@@ -1216,6 +1737,18 @@ const renderWatchlist = () => {
     `;
     
     tbody.appendChild(row);
+  });
+
+  // Bind remove buttons
+  tbody.querySelectorAll('.remove-wl-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const sym = btn.dataset.symbol;
+      removeFromWatchlist(sym);
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: 'unsubscribe', symbols: [sym] }));
+      }
+    };
   });
 };
 
@@ -1452,6 +1985,14 @@ const bindEvents = () => {
       document.querySelectorAll('.ct-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
       switchChartType(newType);
+    });
+  });
+
+  // Indicator selector
+  document.querySelectorAll('.ind-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const indicatorName = e.target.dataset.indicator;
+      toggleIndicator(indicatorName);
     });
   });
   
