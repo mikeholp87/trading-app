@@ -4,17 +4,27 @@ let state = {
   account: null,
   positions: [],
   orders: [],
+  activities: [],
   clock: null,
   watchlist: DEFAULT_WATCHLIST.slice(),
   watchlistQuotes: {},
   currentSymbol: 'SPY',
   timeframe: '1D',
+  chartType: 'candle',
   isConnected: false,
   chart: null,
   candlestickSeries: null,
   volumeSeries: null,
   emaSeries: null,
-  ws: null
+  ws: null,
+  loadingMore: false,
+  chartDataStart: null,
+  chartDataEnd: null,
+  rawBars: [],
+  alerts: JSON.parse(localStorage.getItem('price-alerts') || '[]'),
+  alertsTriggered: new Set(),
+  dailyPnL: 0,
+  realizedPnL: 0
 };
 
 const formatMoney = (value) => {
@@ -132,6 +142,8 @@ const handleWsMessage = (data) => {
       change: parseFloat(change)
     };
     renderWatchlist();
+    checkAlerts(symbol, parseFloat(last));
+    updatePositionPrices(symbol, parseFloat(last));
   } else if (data.type === 'trade') {
     const { S: symbol, p: last, v: volume } = data;
     state.watchlistQuotes[symbol] = {
@@ -140,7 +152,100 @@ const handleWsMessage = (data) => {
       volume: parseInt(volume)
     };
     renderWatchlist();
+    checkAlerts(symbol, parseFloat(last));
+    updatePositionPrices(symbol, parseFloat(last));
   }
+};
+
+// Update position prices in real-time from WebSocket trades
+const updatePositionPrices = (symbol, price) => {
+  if (!price || isNaN(price)) return;
+  state.positions.forEach(pos => {
+    if (pos.symbol === symbol) {
+      const currentPrice = parseFloat(pos.current_price);
+      if (currentPrice !== price) {
+        pos.current_price = price;
+        const avgEntry = parseFloat(pos.avg_entry_price);
+        const qty = parseFloat(pos.qty);
+        pos.unrealized_pl = (price - avgEntry) * qty;
+        pos.unrealized_plpc = ((price - avgEntry) / avgEntry) * 100;
+        pos.market_value = price * qty;
+        renderPositions();
+      }
+    }
+  });
+};
+
+// Check price alerts
+const checkAlerts = (symbol, price) => {
+  if (!price || isNaN(price)) return;
+  state.alerts.forEach(alert => {
+    if (alert.symbol !== symbol) return;
+    const triggered = alert.condition === 'above' ? price >= alert.price : price <= alert.price;
+    if (triggered && !state.alertsTriggered.has(alert.id)) {
+      state.alertsTriggered.add(alert.id);
+      fireAlert(alert, price);
+      renderAlerts();
+    }
+  });
+};
+
+// Fire a browser alert notification
+const fireAlert = (alert, currentPrice) => {
+  const title = `${alert.symbol} Alert`;
+  const body = `${alert.symbol} went ${alert.condition} ${formatMoney(alert.price)} — now ${formatMoney(currentPrice)}`;
+  
+  if ('Notification' in window) {
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(permission => {
+        if (permission === 'granted') new Notification(title, { body });
+      });
+    }
+  }
+  
+  // Play a sound
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 800;
+    gain.gain.value = 0.3;
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+    osc.onended = () => {
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.frequency.value = 1200;
+      gain2.gain.value = 0.3;
+      osc2.start();
+      osc2.stop(ctx.currentTime + 0.15);
+    };
+  } catch (e) {}
+  
+  console.log('[Alert] Triggered:', alert.symbol, alert.condition, alert.price);
+};
+
+// Render alerts list
+const renderAlerts = () => {
+  const container = document.getElementById('alerts-list');
+  container.innerHTML = '';
+  
+  state.alerts.forEach(alert => {
+    const triggered = state.alertsTriggered.has(alert.id);
+    const div = document.createElement('div');
+    div.className = 'alert-item' + (triggered ? ' triggered' : '');
+    div.innerHTML = `
+      <span class="alert-text">${alert.symbol} ${alert.condition} ${formatMoney(alert.price)} ${triggered ? '✓ TRIGGERED' : ''}</span>
+      <button class="alert-delete" data-alert-id="${alert.id}">&times;</button>
+    `;
+    container.appendChild(div);
+  });
 };
 
 const api = {
@@ -165,6 +270,17 @@ const api = {
   delete: async (url) => {
     console.log('[API] DELETE', url);
     const response = await fetch(url, { method: 'DELETE' });
+    const data = await response.json();
+    console.log('[API] Response:', data);
+    return data;
+  },
+  patch: async (url, body) => {
+    console.log('[API] PATCH', url, body);
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
     const data = await response.json();
     console.log('[API] Response:', data);
     return data;
@@ -209,6 +325,176 @@ const loadOrders = async () => {
   }
 };
 
+const loadActivities = async (type = null) => {
+  try {
+    let url = '/api/activities?page_size=50';
+    if (type) url += `&type=${type}`;
+    const result = await api.get(url);
+    if (result.success) {
+      state.activities = result.data || [];
+      console.log('[API] Loaded', state.activities.length, 'activities');
+      renderActivities();
+    }
+  } catch (e) {
+    console.error('[API] Failed to load activities:', e);
+  }
+};
+
+const deleteOrder = async (orderId) => {
+  try {
+    const result = await api.delete(`/api/orders/${orderId}`);
+    if (result.success) {
+      console.log('[API] Order cancelled:', orderId);
+      loadOrders();
+    } else {
+      alert(result.error || 'Failed to cancel order');
+    }
+  } catch (e) {
+    console.error('[API] Failed to cancel order:', e);
+    alert('Failed to cancel order');
+  }
+};
+
+const deleteAllOrders = async () => {
+  if (!confirm('Cancel ALL open orders? This cannot be undone.')) return;
+  
+  try {
+    console.log('[API] Deleting all orders...');
+    const result = await api.delete('/api/orders');
+    if (result.success) {
+      console.log('[API] All orders deleted');
+      loadOrders();
+    } else {
+      alert(result.error || 'Failed to delete orders');
+    }
+  } catch (e) {
+    console.error('[API] Failed to delete all orders:', e);
+    alert('Failed to delete all orders');
+  }
+};
+
+const loadAccountDetails = async () => {
+  try {
+    const result = await api.get('/api/account');
+    if (result.success) {
+      state.account = result.data;
+      renderAccountDetails();
+    }
+  } catch (e) {
+    console.error('[API] Failed to load account details:', e);
+  }
+};
+
+const loadSnapshots = async () => {
+  try {
+    const symbols = state.watchlist.join(',');
+    const result = await api.get(`/api/market/snapshots?symbols=${symbols}`);
+    if (result.success && result.data) {
+      console.log('[API] Loaded snapshots for', Object.keys(result.data).length, 'symbols');
+      
+      // Update watchlist quotes from snapshots
+      Object.entries(result.data).forEach(([symbol, snapshot]) => {
+        if (snapshot.latestQuote) {
+          const q = snapshot.latestQuote;
+          const trade = snapshot.latestTrade;
+          
+          // Calculate change from daily bar
+          let change = 0;
+          if (snapshot.dailyBar && trade) {
+            const prevClose = snapshot.prevDailyBar?.c || snapshot.dailyBar.o;
+            change = ((trade.p - prevClose) / prevClose) * 100;
+          }
+          
+          state.watchlistQuotes[symbol] = {
+            bid: parseFloat(q.bp || 0),
+            ask: parseFloat(q.ap || 0),
+            last: trade ? parseFloat(trade.p) : parseFloat(q.ap || q.bp || 0),
+            change: change
+          };
+        }
+      });
+      
+      renderWatchlist();
+    }
+  } catch (e) {
+    console.error('[API] Failed to load snapshots:', e);
+  }
+};
+
+const renderActivities = () => {
+  const tbody = document.getElementById('activities-body');
+  
+  if (!state.activities || state.activities.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No recent activities</td></tr>';
+    console.log('[UI] No activities to display');
+    return;
+  }
+  
+  console.log('[UI] Rendering', state.activities.length, 'activities');
+  tbody.innerHTML = '';
+  
+  state.activities.forEach(activity => {
+    const row = document.createElement('tr');
+    
+    // Different display based on activity type
+    const type = activity.activity_type || 'unknown';
+    const symbol = activity.symbol || '--';
+    const side = activity.side || '--';
+    const qty = activity.qty || '--';
+    const price = activity.price ? formatMoney(activity.price) : '--';
+    const amount = activity.net_amount ? formatMoney(activity.net_amount) : 
+                   activity.amount ? formatMoney(activity.amount) : '--';
+    
+    const dateStr = activity.date ? formatDate(activity.date) : '--';
+    
+    let typeClass = '';
+    if (type === 'fill') typeClass = 'trade';
+    else if (type === 'dividend') typeClass = 'dividend';
+    else if (type === 'fee') typeClass = 'fee';
+    
+    row.innerHTML = `
+      <td>${dateStr}</td>
+      <td class="${typeClass}">${type}</td>
+      <td>${symbol}</td>
+      <td class="${side === 'buy' ? 'buy' : side === 'sell' ? 'sell' : ''}">${side}</td>
+      <td>${qty}</td>
+      <td>${price}</td>
+      <td>${amount}</td>
+    `;
+    
+    tbody.appendChild(row);
+  });
+};
+
+const renderAccountDetails = () => {
+  if (!state.account) return;
+  
+  const acc = state.account;
+  
+  // Add additional account info if the elements exist
+  const detailsEl = document.getElementById('account-details');
+  if (detailsEl) {
+    detailsEl.innerHTML = `
+      <div class="detail-row">
+        <span>Margin Multiplier:</span>
+        <span>${acc.margin_multiplier || '1'}</span>
+      </div>
+      <div class="detail-row">
+        <span>Day Trade Count:</span>
+        <span>${acc.daytrade_count || 0}</span>
+      </div>
+      <div class="detail-row">
+        <span>Trading Status:</span>
+        <span>${acc.trading_blocked ? 'Blocked' : 'Enabled'}</span>
+      </div>
+      <div class="detail-row">
+        <span>Pattern Day Trader:</span>
+        <span>${acc.pattern_day_trader ? 'Yes' : 'No'}</span>
+      </div>
+    `;
+  }
+};
+
 const loadClock = async () => {
   try {
     const result = await api.get('/api/market/clock');
@@ -221,10 +507,57 @@ const loadClock = async () => {
   }
 };
 
+const loadPortfolioHistory = async () => {
+  try {
+    const result = await api.get('/api/portfolio/history?period=1M');
+    if (result.success && result.data && result.data.equity) {
+      renderEquityChart(result.data);
+    }
+  } catch (e) {
+    console.error('Failed to load portfolio history:', e);
+  }
+};
+
+const renderEquityChart = (data) => {
+  const container = document.getElementById('equity-chart-container');
+  if (!container || !data.equity) return;
+  
+  // Simple sparkline using canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = container.clientWidth || 200;
+  canvas.height = 40;
+  container.appendChild(canvas);
+  
+  const ctx = canvas.getContext('2d');
+  const equity = data.equity;
+  const min = Math.min(...equity);
+  const max = Math.max(...equity);
+  const range = max - min || 1;
+  
+  ctx.strokeStyle = equity[equity.length - 1] >= equity[0] ? '#10b981' : '#ef4444';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  
+  equity.forEach((val, i) => {
+    const x = (i / (equity.length - 1)) * canvas.width;
+    const y = canvas.height - ((val - min) / range) * canvas.height;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  
+  ctx.stroke();
+};
+
 const loadChart = async (symbol, timeframe) => {
   console.log('[Chart] Loading chart for', symbol, 'timeframe:', timeframe);
   const param = getTimeframeParam(timeframe);
   const start = getStartDate(timeframe);
+
+  // Reset bounds when changing symbol
+  state.chartDataStart = null;
+  state.chartDataEnd = null;
+  state.loadedEarliest = false;
+  state.rawBars = [];
   
   try {
     console.log('[Chart] Fetching from /api/market/historical/', symbol, '?timeframe=', param);
@@ -310,32 +643,13 @@ const initChart = () => {
       handleScale: true
     });
     
-    state.candlestickSeries = state.chart.addCandlestickSeries({
-      upColor: '#00ff88',
-      downColor: '#ff3d5a',
-      borderUpColor: '#00ff88',
-      borderDownColor: '#ff3d5a',
-      wickUpColor: '#00ff88',
-      wickDownColor: '#ff3d5a'
-    });
-    
-    state.volumeSeries = state.chart.addHistogramSeries({
-      color: '#26a69a',
-      priceFormat: { type: 'volume' },
-      priceScaleId: ''
-    });
-    
-    state.volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 }
-    });
-    
-    state.emaSeries = state.chart.addLineSeries({
-      color: '#ffaa00',
-      lineWidth: 2,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false
-    });
-    
+    state.candlestickSeries = null;
+    state.volumeSeries = null;
+    state.emaSeries = null;
+
+    // Create series based on current chart type
+    createSeriesForType(state.chartType);
+
     // Proper resize handler using ResizeObserver
     const resizeObserver = new ResizeObserver(() => {
       if (state.chart && container.clientWidth > 0 && container.clientHeight > 0) {
@@ -347,8 +661,147 @@ const initChart = () => {
     });
     
     resizeObserver.observe(container);
+
+    // Subscribe to visible range changes for auto-loading more data
+    state.chart.timeScale().subscribeVisibleRangeChange((newRange) => {
+      if (!newRange || !state.currentSymbol || state.loadingMore) return;
+      loadMoreOnScroll(newRange);
+    });
+
     console.log('[Chart] Chart initialized, series ready');
   });
+};
+
+// Format bar data for the current chart type
+const formatPriceData = (bars) => {
+  if (state.chartType === 'line' || state.chartType === 'area') {
+    return bars.map(b => ({ time: b.time, value: b.close }));
+  }
+  return bars;
+};
+
+// Create chart series based on type
+const createSeriesForType = (type) => {
+  if (!state.chart) return;
+
+  // Volume series (always histogram)
+  state.volumeSeries = state.chart.addHistogramSeries({
+    color: '#26a69a',
+    priceFormat: { type: 'volume' },
+    priceScaleId: ''
+  });
+  state.volumeSeries.priceScale().applyOptions({
+    scaleMargins: { top: 0.8, bottom: 0 }
+  });
+
+  // EMA line series (always line)
+  state.emaSeries = state.chart.addLineSeries({
+    color: '#ffaa00',
+    lineWidth: 2,
+    priceLineVisible: false,
+    crosshairMarkerVisible: false
+  });
+
+  // Main price series based on type
+  switch (type) {
+    case 'candle':
+      state.candlestickSeries = state.chart.addCandlestickSeries({
+        upColor: '#00ff88',
+        downColor: '#ff3d5a',
+        borderUpColor: '#00ff88',
+        borderDownColor: '#ff3d5a',
+        wickUpColor: '#00ff88',
+        wickDownColor: '#ff3d5a'
+      });
+      break;
+    case 'line':
+      state.candlestickSeries = state.chart.addLineSeries({
+        color: '#00d4ff',
+        lineWidth: 2,
+        priceLineVisible: false,
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius: 4
+      });
+      break;
+    case 'area':
+      state.candlestickSeries = state.chart.addAreaSeries({
+        topColor: 'rgba(0, 212, 255, 0.4)',
+        bottomColor: 'rgba(0, 212, 255, 0.0)',
+        lineColor: '#00d4ff',
+        lineWidth: 2,
+        priceLineVisible: false,
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius: 4
+      });
+      break;
+    case 'bar':
+      state.candlestickSeries = state.chart.addBarSeries({
+        upColor: '#00ff88',
+        downColor: '#ff3d5a',
+        borderUpColor: '#00ff88',
+        borderDownColor: '#ff3d5a',
+        borderVisible: true
+      });
+      break;
+    default:
+      state.candlestickSeries = state.chart.addCandlestickSeries({
+        upColor: '#00ff88',
+        downColor: '#ff3d5a',
+        borderUpColor: '#00ff88',
+        borderDownColor: '#ff3d5a',
+        wickUpColor: '#00ff88',
+        wickDownColor: '#ff3d5a'
+      });
+  }
+
+  console.log('[Chart] Series created for type:', type);
+};
+
+// Switch chart type and reload data
+const switchChartType = async (newType) => {
+  if (!state.chart || state.chartType === newType) return;
+  if (state.rawBars.length === 0) return;
+
+  console.log('[Chart] Switching from', state.chartType, 'to', newType);
+
+  // Remove all old series
+  if (state.candlestickSeries) {
+    state.chart.removeSeries(state.candlestickSeries);
+    state.candlestickSeries = null;
+  }
+  if (state.emaSeries) {
+    state.chart.removeSeries(state.emaSeries);
+    state.emaSeries = null;
+  }
+  if (state.volumeSeries) {
+    state.chart.removeSeries(state.volumeSeries);
+    state.volumeSeries = null;
+  }
+
+  // Update state
+  state.chartType = newType;
+
+  // Create new series type
+  createSeriesForType(newType);
+
+  // Re-apply data to new series using stored raw bars
+  const formattedData = formatPriceData(state.rawBars);
+  state.candlestickSeries.setData(formattedData);
+
+  // Re-apply volume
+  const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
+  state.volumeSeries.setData(volumeData);
+
+  // Re-apply EMA
+  const ema20 = calculateEMA(state.rawBars.map(b => b.close), 20);
+  const emaData = state.rawBars.map((b, i) => ({
+    time: b.time,
+    value: ema20[i] || null
+  })).filter(d => d.value !== null);
+  state.emaSeries.setData(emaData);
+
+  state.chart.timeScale().fitContent();
+  console.log('[Chart] Switched to', newType);
 };
 
 const updateChart = (bars, timeframe) => {
@@ -358,12 +811,16 @@ const updateChart = (bars, timeframe) => {
   }
   
   console.log('[Chart] Setting', bars.length, 'candles, first bar:', bars[0]);
-  
-  state.candlestickSeries.setData(bars);
-  
+
+  const formattedBars = formatPriceData(bars);
+  state.candlestickSeries.setData(formattedBars);
+
+  // Store raw OHLC bars for reformatting on chart type switch
+  state.rawBars = bars;
+
   const volumeData = bars.map(b => ({ time: b.time, value: b.volume }));
   state.volumeSeries.setData(volumeData);
-  
+
   const ema20 = calculateEMA(bars.map(b => b.close), 20);
   const emaData = bars.map((b, i) => ({
     time: b.time,
@@ -373,7 +830,12 @@ const updateChart = (bars, timeframe) => {
   state.emaSeries.setData(emaData);
   
   state.chart.timeScale().fitContent();
-  
+
+  // Track data bounds for infinite scroll
+  state.chartDataStart = bars.length > 0 ? bars[0].time : null;
+  state.chartDataEnd = bars.length > 0 ? bars[bars.length - 1].time : null;
+  state.loadedEarliest = false;
+
   // Force resize after data load
   const container = document.getElementById('chart-container');
   setTimeout(() => {
@@ -387,6 +849,151 @@ const updateChart = (bars, timeframe) => {
   }, 50);
   
   console.log('[Chart] Rendered, chart size:', container.clientWidth, 'x', container.clientHeight);
+};
+
+// Auto-load more data when user scrolls to data edges
+const loadMoreOnScroll = async (range) => {
+  if (!state.chart || !state.currentSymbol || state.loadingMore) return;
+  if (!state.chartDataStart || !state.chartDataEnd) return;
+
+  const start = state.chartDataStart;
+  const end = state.chartDataEnd;
+  const duration = end - start;
+  if (duration <= 0) return;
+
+  // Calculate time span of one bar based on current visible range
+  const visibleRange = range.to - range.from;
+  const estimatedBarCount = Math.max(50, Math.round(visibleRange / (duration / state.rawBars.length)));
+  const barTimeSpan = duration / estimatedBarCount;
+
+  // --- Scroll LEFT: load older data ---
+  if (range.from <= start + barTimeSpan && !state.loadedEarliest) {
+    state.loadingMore = true;
+    const currentTF = state.timeframe;
+    const param = getTimeframeParam(currentTF);
+    const startDate = getHistoricalStart(currentTF, start);
+    const endDateStr = new Date(start * 1000).toISOString();
+
+    console.log('[Chart] Loading older data from', startDate, 'to', endDateStr);
+
+    try {
+      const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDateStr}`);
+      if (result.success && result.data.bars && result.data.bars.length > 0) {
+        const newBars = result.data.bars.map(b => ({
+          time: new Date(b.t).getTime() / 1000,
+          open: parseFloat(b.o),
+          high: parseFloat(b.h),
+          low: parseFloat(b.l),
+          close: parseFloat(b.c),
+          volume: parseInt(b.v)
+        }));
+
+        state.rawBars = [...newBars, ...state.rawBars];
+        state.candlestickSeries.setData(formatPriceData(state.rawBars));
+
+        const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
+        state.volumeSeries.setData(volumeData);
+
+        const combinedCloses = state.rawBars.map(b => b.close);
+        const ema20 = calculateEMA(combinedCloses, 20);
+        const emaData = state.rawBars.map((b, i) => ({
+          time: b.time,
+          value: ema20[i] || null
+        })).filter(d => d.value !== null);
+        state.emaSeries.setData(emaData);
+
+        state.chartDataStart = newBars[0].time;
+
+        console.log('[Chart] Loaded', newBars.length, 'older bars. Total:', state.rawBars.length);
+        if (newBars.length < 50) state.loadedEarliest = true;
+      } else {
+        state.loadedEarliest = true;
+        console.log('[Chart] No older data available');
+      }
+    } catch (e) {
+      console.error('[Chart] Failed to load older data:', e);
+    }
+
+    state.loadingMore = false;
+    return;
+  }
+
+  // --- Scroll RIGHT: load newer data ---
+  if (range.to >= end - barTimeSpan) {
+    state.loadingMore = true;
+    const currentTF = state.timeframe;
+    const param = getTimeframeParam(currentTF);
+    const startDate = new Date(end * 1000).toISOString();
+    const endDate = new Date(end * 1000 + getForwardMs(currentTF)).toISOString();
+
+    console.log('[Chart] Loading newer data from', startDate, 'to', endDate);
+
+    try {
+      const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDate}`);
+      if (result.success && result.data.bars && result.data.bars.length > 0) {
+        const newBars = result.data.bars.map(b => ({
+          time: new Date(b.t).getTime() / 1000,
+          open: parseFloat(b.o),
+          high: parseFloat(b.h),
+          low: parseFloat(b.l),
+          close: parseFloat(b.c),
+          volume: parseInt(b.v)
+        })).filter(b => b.time > end);
+
+        if (newBars.length === 0) {
+          console.log('[Chart] No newer bars available');
+          state.loadingMore = false;
+          return;
+        }
+
+        state.rawBars = [...state.rawBars, ...newBars];
+        state.candlestickSeries.setData(formatPriceData(state.rawBars));
+
+        const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
+        state.volumeSeries.setData(volumeData);
+
+        const combinedCloses = state.rawBars.map(b => b.close);
+        const ema20 = calculateEMA(combinedCloses, 20);
+        const emaData = state.rawBars.map((b, i) => ({
+          time: b.time,
+          value: ema20[i] || null
+        })).filter(d => d.value !== null);
+        state.emaSeries.setData(emaData);
+
+        state.chartDataEnd = newBars[newBars.length - 1].time;
+        console.log('[Chart] Loaded', newBars.length, 'newer bars. Total:', state.rawBars.length);
+      }
+    } catch (e) {
+      console.error('[Chart] Failed to load newer data:', e);
+    }
+
+    state.loadingMore = false;
+  }
+};
+
+// Get a start date for loading historical data before a given timestamp
+const getHistoricalStart = (tf, beforeTimestamp) => {
+  const before = new Date(beforeTimestamp * 1000);
+  const map = {
+    '1D': new Date(before.getTime() - 3 * 24 * 60 * 60 * 1000),
+    '5D': new Date(before.getTime() - 10 * 24 * 60 * 60 * 1000),
+    '1M': new Date(before.getTime() - 40 * 24 * 60 * 60 * 1000),
+    '3M': new Date(before.getTime() - 110 * 24 * 60 * 60 * 1000),
+    '1Y': new Date(before.getTime() - 420 * 24 * 60 * 60 * 1000)
+  };
+  return (map[tf] || map['1M']).toISOString();
+};
+
+// Get milliseconds to load forward for newer data
+const getForwardMs = (tf) => {
+  const map = {
+    '1D': 2 * 24 * 60 * 60 * 1000,
+    '5D': 8 * 24 * 60 * 60 * 1000,
+    '1M': 35 * 24 * 60 * 60 * 1000,
+    '3M': 100 * 24 * 60 * 60 * 1000,
+    '1Y': 400 * 24 * 60 * 60 * 1000
+  };
+  return map[tf] || map['1M'];
 };
 
 // Resizable panel functionality
@@ -616,7 +1223,7 @@ const renderPositions = () => {
   const tbody = document.getElementById('positions-body');
   
   if (!state.positions || state.positions.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No open positions</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No open positions</td></tr>';
     console.log('[UI] No positions to display');
     return;
   }
@@ -647,9 +1254,31 @@ const renderPositions = () => {
       <td>${formatMoney(marketValue)}</td>
       <td class="${unrealizedPL >= 0 ? 'positive' : 'negative'}">${formatMoney(unrealizedPL)}</td>
       <td class="${unrealizedPLPercent >= 0 ? 'positive' : 'negative'}">${formatPercent(unrealizedPLPercent)}</td>
+      <td><button class="close-pos-btn" data-symbol="${pos.symbol}">Close</button></td>
     `;
     
     tbody.appendChild(row);
+  });
+  
+  // Add close position handlers
+  tbody.querySelectorAll('.close-pos-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const symbol = btn.dataset.symbol;
+      if (confirm(`Close position in ${symbol}?`)) {
+        try {
+          const result = await api.delete(`/api/positions/${symbol}`);
+          if (result.success) {
+            loadPositions();
+            loadAccount();
+          } else {
+            alert(result.error || 'Failed to close position');
+          }
+        } catch (e) {
+          alert('Failed to close position');
+        }
+      }
+    };
   });
   
   renderWatchlist();
@@ -670,21 +1299,25 @@ const renderOrders = () => {
   state.orders.forEach(order => {
     const row = document.createElement('tr');
     const sideClass = order.side === 'buy' ? 'buy' : 'sell';
-    const statusClass = order.status === 'filled' ? 'filled' :
-                     order.status === 'pending' || order.status === 'new' ? 'pending' :
-                     order.status === 'cancelled' || order.status === 'rejected' ? 'cancelled' : '';
+    const statusClass = 'status-' + order.status.replace('_', '_');
+
+    let actionsHTML = '';
+    const isActive = !['filled', 'cancelled', 'rejected', 'expired'].includes(order.status);
+    if (isActive) {
+      actionsHTML = `<button class="modify-btn" data-order-id="${order.id}" data-symbol="${order.symbol}" data-side="${order.side}" data-type="${order.type}" data-qty="${order.qty}" data-limit="${order.limit_price || ''}" data-tif="${order.time_in_force}">Modify</button>
+        <button class="cancel-btn" data-order-id="${order.id}">Cancel</button>`;
+    }
     
     row.innerHTML = `
       <td>${order.symbol}</td>
       <td class="${sideClass}">${order.side.toUpperCase()}</td>
-      <td>${order.type}</td>
+      <td>${order.type.replace('_', ' ')}</td>
       <td>${order.qty}</td>
       <td>${order.filled_qty}</td>
-      <td>${order.limit_price ? formatMoney(order.limit_price) : '--'}</td>
-      <td class="${statusClass}">${order.status}</td>
+      <td>${order.limit_price ? formatMoney(order.limit_price) : order.stop_price ? formatMoney(order.stop_price) : '--'}</td>
+      <td class="${statusClass}">${order.status.replace('_', ' ')}</td>
       <td>${formatDate(order.submitted_at)}</td>
-      <td>${order.status === 'filled' || order.status === 'cancelled' || order.status === 'rejected' ? '' :
-        `<button class="cancel-btn" data-order-id="${order.id}">Cancel</button>`}</td>
+      <td>${actionsHTML}</td>
     `;
     
     tbody.appendChild(row);
@@ -695,16 +1328,7 @@ const renderOrders = () => {
       e.stopPropagation();
       const orderId = btn.dataset.orderId;
       if (confirm('Cancel this order?')) {
-        try {
-          const result = await api.delete(`/api/orders/${orderId}`);
-          if (result.success) {
-            loadOrders();
-          } else {
-            alert(result.error || 'Failed to cancel order');
-          }
-        } catch (e) {
-          alert('Failed to cancel order');
-        }
+        deleteOrder(orderId);
       }
     };
   });
@@ -714,26 +1338,16 @@ const render = async () => {
   console.log('[App] Initializing dashboard...');
   await Promise.all([loadAccount(), loadPositions(), loadOrders(), loadClock()]);
   
-  // Load initial quotes for watchlist
-  console.log('[App] Loading watchlist quotes...');
-  for (const symbol of state.watchlist) {
-    try {
-      const result = await api.get(`/api/market/quote/${symbol}`);
-      if (result.success && result.data && result.data.quote) {
-        const q = result.data.quote;
-        state.watchlistQuotes[symbol] = {
-          bid: parseFloat(q.bp || 0),
-          ask: parseFloat(q.ap || 0),
-          last: parseFloat(q.lp || q.ap || q.bp || 0),
-          change: 0
-        };
-      }
-    } catch (e) {
-      console.log('[App] Failed to load quote for', symbol);
-    }
-  }
+  // Load portfolio history for equity chart
+  loadPortfolioHistory();
   
-  renderWatchlist();
+  // Load initial quotes for watchlist using batch snapshots
+  console.log('[App] Loading watchlist quotes via snapshots...');
+  loadSnapshots();
+  
+  // Load activities
+  loadActivities();
+  
   console.log('[App] Loading default chart:', state.currentSymbol, state.timeframe);
   initChart();
   loadChart(state.currentSymbol, state.timeframe);
@@ -759,15 +1373,27 @@ const addToWatchlist = () => {
       }));
     }
     
-    api.get(`/api/market/quote/${symbol}`).then(result => {
-      if (result.success && result.data && result.data.quote) {
-        const q = result.data.quote;
-        state.watchlistQuotes[symbol] = {
-          bid: parseFloat(q.bp || 0),
-          ask: parseFloat(q.ap || 0),
-          last: parseFloat(q.lp || q.ap || q.bp || 0),
-          change: 0
-        };
+    // Load snapshot for new symbol
+    api.get(`/api/market/snapshot/${symbol}`).then(result => {
+      if (result.success && result.data) {
+        const snapshot = result.data;
+        if (snapshot.latestQuote) {
+          const q = snapshot.latestQuote;
+          const trade = snapshot.latestTrade;
+          
+          let change = 0;
+          if (snapshot.dailyBar && trade) {
+            const prevClose = snapshot.prevDailyBar?.c || snapshot.dailyBar.o;
+            change = ((trade.p - prevClose) / prevClose) * 100;
+          }
+          
+          state.watchlistQuotes[symbol] = {
+            bid: parseFloat(q.bp || 0),
+            ask: parseFloat(q.ap || 0),
+            last: trade ? parseFloat(trade.p) : parseFloat(q.ap || q.bp || 0),
+            change: change
+          };
+        }
       }
       renderWatchlist();
     });
@@ -817,6 +1443,17 @@ const bindEvents = () => {
       loadChart(state.currentSymbol, state.timeframe);
     });
   });
+
+  // Chart type selector
+  document.querySelectorAll('.ct-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const newType = e.target.dataset.ct;
+      if (newType === state.chartType) return;
+      document.querySelectorAll('.ct-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      switchChartType(newType);
+    });
+  });
   
   const watchlistAdd = document.getElementById('watchlist-add');
   watchlistAdd.addEventListener('input', (e) => {
@@ -833,6 +1470,8 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
     const side = document.querySelector('.side-btn.active').dataset.side;
     const type = document.getElementById('order-type').value;
     const limitPrice = document.getElementById('limit-price').value;
+    const stopPrice = document.getElementById('stop-price').value;
+    const trailAmount = document.getElementById('trail-amount').value;
     const timeInForce = document.getElementById('time-in-force').value;
     const feedback = document.getElementById('order-feedback');
     
@@ -842,8 +1481,20 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
       return;
     }
     
-    if (type === 'limit' && !limitPrice) {
+    if ((type === 'limit' || type === 'stop_limit' || type === 'take_profit') && !limitPrice) {
       feedback.textContent = 'Limit price required';
+      feedback.className = 'order-feedback error';
+      return;
+    }
+    
+    if ((type === 'stop' || type === 'stop_limit') && !stopPrice) {
+      feedback.textContent = 'Stop price required';
+      feedback.className = 'order-feedback error';
+      return;
+    }
+    
+    if (type === 'trailing_stop' && !trailAmount) {
+      feedback.textContent = 'Trail amount required';
       feedback.className = 'order-feedback error';
       return;
     }
@@ -856,8 +1507,21 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
       time_in_force: timeInForce
     };
     
-    if (type === 'limit') {
+    if (type === 'limit' || type === 'stop_limit') {
       order.limit_price = parseFloat(limitPrice);
+    }
+    if (type === 'stop' || type === 'stop_limit') {
+      order.stop_price = parseFloat(stopPrice);
+    }
+    if (type === 'take_profit') {
+      order.limit_price = parseFloat(limitPrice);
+    }
+    if (type === 'trailing_stop') {
+      if (trailAmount.endsWith('%')) {
+        order.trail_percent = parseFloat(trailAmount);
+      } else {
+        order.trail = parseFloat(trailAmount);
+      }
     }
     
     feedback.textContent = 'Submitting...';
@@ -874,6 +1538,8 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
         document.getElementById('order-symbol').value = '';
         document.getElementById('order-qty').value = '1';
         document.getElementById('limit-price').value = '';
+        document.getElementById('stop-price').value = '';
+        document.getElementById('trail-amount').value = '';
       } else {
         feedback.textContent = result.error || 'Failed to place order';
         feedback.className = 'order-feedback error';
@@ -890,8 +1556,14 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
   });
   
   document.getElementById('order-type').addEventListener('change', (e) => {
+    const type = e.target.value;
     const limitRow = document.querySelector('.limit-price-row');
-    limitRow.classList.toggle('hidden', e.target.value !== 'limit');
+    const stopRow = document.querySelector('.stop-price-row');
+    const trailRow = document.querySelector('.trailing-amt-row');
+
+    limitRow.classList.toggle('hidden', type !== 'limit' && type !== 'stop_limit' && type !== 'take_profit');
+    stopRow.classList.toggle('hidden', type !== 'stop' && type !== 'stop_limit');
+    trailRow.classList.toggle('hidden', type !== 'trailing_stop');
   });
   
   document.querySelectorAll('.side-btn').forEach(btn => {
@@ -903,6 +1575,142 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
   
   document.getElementById('refresh-positions').addEventListener('click', loadPositions);
   document.getElementById('refresh-orders').addEventListener('click', loadOrders);
+  document.getElementById('refresh-activities').addEventListener('click', () => {
+    const filter = document.getElementById('activity-type-filter').value;
+    loadActivities(filter || null);
+  });
+  
+  document.getElementById('activity-type-filter').addEventListener('change', (e) => {
+    loadActivities(e.target.value || null);
+  });
+  
+  document.getElementById('delete-all-orders').addEventListener('click', deleteAllOrders);
+  
+  document.getElementById('close-all-positions').addEventListener('click', async () => {
+    if (!confirm('Close ALL open positions? This cannot be undone.')) return;
+    try {
+      const result = await api.delete('/api/positions');
+      if (result.success) {
+        loadPositions();
+        loadAccount();
+      } else {
+        alert(result.error || 'Failed to close positions');
+      }
+    } catch (e) {
+      alert('Failed to close positions');
+    }
+  });
+
+  // Modify Order Modal
+  let modifyOrderId = null;
+  
+  document.getElementById('orders-body').addEventListener('click', (e) => {
+    const modifyBtn = e.target.closest('.modify-btn');
+    if (modifyBtn) {
+      e.stopPropagation();
+      modifyOrderId = modifyBtn.dataset.orderId;
+      
+      document.getElementById('modify-symbol').value = modifyBtn.dataset.symbol;
+      document.getElementById('modify-side').value = modifyBtn.dataset.side.toUpperCase();
+      document.getElementById('modify-type').value = modifyBtn.dataset.type;
+      document.getElementById('modify-qty').value = modifyBtn.dataset.qty;
+      document.getElementById('modify-limit-price').value = modifyBtn.dataset.limit;
+      document.getElementById('modify-time-in-force').value = modifyBtn.dataset.tif;
+      
+      document.getElementById('modify-order-modal').classList.remove('hidden');
+    }
+  });
+  
+  document.getElementById('close-modify-modal').addEventListener('click', () => {
+    document.getElementById('modify-order-modal').classList.add('hidden');
+    modifyOrderId = null;
+  });
+  
+  document.getElementById('cancel-modify').addEventListener('click', () => {
+    document.getElementById('modify-order-modal').classList.add('hidden');
+    modifyOrderId = null;
+  });
+  
+  document.getElementById('modify-order-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'modify-order-modal') {
+      document.getElementById('modify-order-modal').classList.add('hidden');
+      modifyOrderId = null;
+    }
+  });
+  
+  document.getElementById('modify-order-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!modifyOrderId) return;
+    
+    const feedback = document.getElementById('modify-feedback');
+    const data = {
+      qty: parseInt(document.getElementById('modify-qty').value),
+      time_in_force: document.getElementById('modify-time-in-force').value
+    };
+    
+    const limitPrice = document.getElementById('modify-limit-price').value;
+    if (limitPrice) data.limit_price = parseFloat(limitPrice);
+    
+    feedback.textContent = 'Modifying...';
+    feedback.className = 'order-feedback';
+    
+    try {
+      const result = await api.patch(`/api/orders/${modifyOrderId}`, data);
+      if (result.success) {
+        feedback.textContent = 'Order modified!';
+        feedback.className = 'order-feedback success';
+        setTimeout(() => {
+          document.getElementById('modify-order-modal').classList.add('hidden');
+          modifyOrderId = null;
+          loadOrders();
+        }, 1000);
+      } else {
+        feedback.textContent = result.error || 'Failed to modify';
+        feedback.className = 'order-feedback error';
+      }
+    } catch (e) {
+      feedback.textContent = 'Error modifying order';
+      feedback.className = 'order-feedback error';
+    }
+  });
+
+  // Price Alerts
+  document.getElementById('add-alert-btn').addEventListener('click', () => {
+    const symbol = document.getElementById('alert-symbol').value.toUpperCase().trim();
+    const condition = document.getElementById('alert-condition').value;
+    const price = parseFloat(document.getElementById('alert-price').value);
+    
+    if (!symbol || isNaN(price) || price <= 0) {
+      alert('Enter a valid symbol and price');
+      return;
+    }
+    
+    const alert = { symbol, condition, price, id: Date.now() };
+    state.alerts.push(alert);
+    localStorage.setItem('price-alerts', JSON.stringify(state.alerts));
+    
+    document.getElementById('alert-symbol').value = '';
+    document.getElementById('alert-price').value = '';
+    renderAlerts();
+  });
+  
+  document.getElementById('clear-alerts').addEventListener('click', () => {
+    state.alerts = [];
+    state.alertsTriggered.clear();
+    localStorage.setItem('price-alerts', '[]');
+    renderAlerts();
+  });
+  
+  document.getElementById('alerts-list').addEventListener('click', (e) => {
+    const deleteBtn = e.target.closest('.alert-delete');
+    if (deleteBtn) {
+      const alertId = parseInt(deleteBtn.dataset.alertId);
+      state.alerts = state.alerts.filter(a => a.id !== alertId);
+      state.alertsTriggered.delete(alertId);
+      localStorage.setItem('price-alerts', JSON.stringify(state.alerts));
+      renderAlerts();
+    }
+  });
 };
 
 const init = async () => {
@@ -912,15 +1720,22 @@ const init = async () => {
       state.watchlist = JSON.parse(saved);
     } catch (e) {}
   }
-  
+
+  // Request notification permission
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
   bindEvents();
   initWebSocket();
   initResizable();
+  renderAlerts();
   await render();
   
   setInterval(loadPositions, 10000);
   setInterval(loadOrders, 5000);
   setInterval(loadAccount, 15000);
+  setInterval(loadActivities, 60000); // Refresh activities every minute
 };
 
 document.addEventListener('DOMContentLoaded', init);

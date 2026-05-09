@@ -7,6 +7,9 @@ const accountRoutes = require('./src/routes/account');
 const positionsRoutes = require('./src/routes/positions');
 const ordersRoutes = require('./src/routes/orders');
 const marketRoutes = require('./src/routes/market');
+const portfolioRoutes = require('./src/routes/portfolio');
+const assetsRoutes = require('./src/routes/assets');
+const activitiesRoutes = require('./src/routes/activities');
 const websocket = require('./src/websocket');
 
 const app = express();
@@ -31,6 +34,9 @@ app.use('/api/account', accountRoutes);
 app.use('/api/positions', positionsRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/market', marketRoutes);
+app.use('/api/portfolio', portfolioRoutes);
+app.use('/api/assets', assetsRoutes);
+app.use('/api/activities', activitiesRoutes);
 
 const server = http.createServer(app);
 

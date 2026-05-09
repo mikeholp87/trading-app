@@ -30,13 +30,14 @@
       <section class="panel account-panel">
         <div class="panel-header">
           <h2>Account Overview</h2>
-          <span class="badge" id="account-status">--</span>
+          <button class="close-all-btn" id="close-all-positions">Close All</button>
         </div>
         <div class="panel-content">
           <div class="account-stats">
             <div class="stat-item">
               <span class="stat-label">Equity</span>
               <span class="stat-value" id="account-equity">--</span>
+              <div id="equity-chart-container"></div>
             </div>
             <div class="stat-item">
               <span class="stat-label">Buying Power</span>
@@ -62,6 +63,12 @@
         <div class="panel-header">
           <div class="chart-controls">
             <input type="text" id="chart-symbol" value="SPY" placeholder="Symbol">
+            <div class="chart-type-selector">
+              <button class="ct-btn active" data-ct="candle" title="Candlestick">&#x25BC;</button>
+              <button class="ct-btn" data-ct="line" title="Line">&#x2503;</button>
+              <button class="ct-btn" data-ct="area" title="Area">&#x2591;</button>
+              <button class="ct-btn" data-ct="bar" title="OHLC Bar">&#x2551;</button>
+            </div>
             <div class="timeframe-selector">
               <button class="tf-btn active" data-tf="1D">1D</button>
               <button class="tf-btn" data-tf="5D">5D</button>
@@ -121,6 +128,7 @@
                 <th>Market Value</th>
                 <th>Unrealized P&L</th>
                 <th>P&L%</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="positions-body">
@@ -135,7 +143,10 @@
       <section class="panel orders-panel">
         <div class="panel-header">
           <h2>Orders</h2>
-          <button class="refresh-btn" id="refresh-orders">Refresh</button>
+          <div class="panel-actions">
+            <button class="refresh-btn" id="refresh-orders">Refresh</button>
+            <button class="delete-all-btn" id="delete-all-orders">Delete All</button>
+          </div>
         </div>
         <div class="panel-content">
           <table class="data-table orders-table">
@@ -161,6 +172,42 @@
         </div>
       </section>
 
+      <section class="panel activities-panel">
+        <div class="panel-header">
+          <h2>Recent Activities</h2>
+          <div class="panel-actions">
+            <select id="activity-type-filter" class="activity-filter">
+              <option value="">All Types</option>
+              <option value="fill">Trades</option>
+              <option value="dividend">Dividends</option>
+              <option value="fee">Fees</option>
+              <option value="interest">Interest</option>
+            </select>
+            <button class="refresh-btn" id="refresh-activities">Refresh</button>
+          </div>
+        </div>
+        <div class="panel-content">
+          <table class="data-table activities-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody id="activities-body">
+              <tr class="empty-row">
+                <td colspan="7">No recent activities</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel order-ticket-panel">
         <div class="panel-header">
           <h2>Place Order</h2>
@@ -180,11 +227,23 @@
               <select id="order-type">
                 <option value="market">Market</option>
                 <option value="limit">Limit</option>
+                <option value="stop">Stop</option>
+                <option value="stop_limit">Stop Limit</option>
+                <option value="trailing_stop">Trailing Stop</option>
+                <option value="take_profit">Take Profit</option>
               </select>
             </div>
             <div class="form-row limit-price-row hidden">
               <label>Limit Price</label>
               <input type="number" id="limit-price" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-row stop-price-row hidden">
+              <label>Stop Price</label>
+              <input type="number" id="stop-price" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-row trailing-amt-row hidden">
+              <label>Trail Amt or %</label>
+              <input type="text" id="trail-amount" placeholder="5.00 or 5%">
             </div>
             <div class="form-row">
               <label>Quantity</label>
@@ -195,6 +254,8 @@
               <select id="time-in-force">
                 <option value="day">Day</option>
                 <option value="gtc">GTC</option>
+                <option value="ioc">IOC</option>
+                <option value="fok">FOK</option>
               </select>
             </div>
             <div class="order-preview">
@@ -208,10 +269,74 @@
           </form>
         </div>
       </section>
+
+      <!-- Price Alerts Panel -->
+      <section class="panel alerts-panel">
+        <div class="panel-header">
+          <h2>Price Alerts</h2>
+          <button class="refresh-btn" id="clear-alerts">Clear All</button>
+        </div>
+        <div class="panel-content">
+          <div class="alert-form">
+            <input type="text" id="alert-symbol" placeholder="AAPL" maxlength="5">
+            <select id="alert-condition">
+              <option value="above">Above</option>
+              <option value="below">Below</option>
+            </select>
+            <input type="number" id="alert-price" placeholder="Price" step="0.01">
+            <button class="add-btn" id="add-alert-btn">+</button>
+          </div>
+          <div id="alerts-list" class="alerts-list"></div>
+        </div>
+      </section>
+
+      <!-- Modify Order Modal -->
+      <div id="modify-order-modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Modify Order</h3>
+            <button class="modal-close" id="close-modify-modal">&times;</button>
+          </div>
+          <form id="modify-order-form" class="order-form">
+            <div class="form-row">
+              <label>Symbol</label>
+              <input type="text" id="modify-symbol" readonly>
+            </div>
+            <div class="form-row">
+              <label>Side</label>
+              <input type="text" id="modify-side" readonly>
+            </div>
+            <div class="form-row">
+              <label>Type</label>
+              <input type="text" id="modify-type" readonly>
+            </div>
+            <div class="form-row">
+              <label>New Qty</label>
+              <input type="number" id="modify-qty" min="1" required>
+            </div>
+            <div class="form-row limit-price-row">
+              <label>New Limit Price</label>
+              <input type="number" id="modify-limit-price" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-row">
+              <label>New Time in Force</label>
+              <select id="modify-time-in-force">
+                <option value="day">Day</option>
+                <option value="gtc">GTC</option>
+              </select>
+            </div>
+            <div class="modal-actions">
+              <button type="submit" class="submit-btn">Modify Order</button>
+              <button type="button" class="cancel-btn" id="cancel-modify">Cancel</button>
+            </div>
+            <div class="order-feedback" id="modify-feedback"></div>
+          </form>
+        </div>
+      </div>
     </main>
   </div>
 
-  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

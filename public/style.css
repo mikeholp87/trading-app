@@ -360,6 +360,43 @@ body {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
+/* Chart Type Selector */
+.chart-type-selector {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-primary);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+.ct-btn {
+  width: 28px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: var(--radius-sm);
+}
+
+.ct-btn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.ct-btn.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border: 1px solid var(--accent-glow);
+}
+
 .timeframe-selector {
   display: flex;
   gap: 4px;
@@ -429,6 +466,11 @@ body {
   min-height: 400px;
 }
 
+.watchlist-panel .panel-content {
+  max-height: none;
+  flex: 1;
+}
+
 .watchlist-input {
   display: flex;
   gap: 8px;
@@ -483,8 +525,7 @@ body {
 }
 
 .positions-panel .panel-content,
-.orders-panel .panel-content,
-.watchlist-panel .panel-content {
+.orders-panel .panel-content {
   max-height: 180px;
   overflow-y: auto;
 }
@@ -632,6 +673,56 @@ body {
   background: var(--red-subtle);
   border-color: var(--red);
   color: var(--red);
+}
+
+.close-pos-btn {
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--red);
+  color: var(--red);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: var(--radius-sm);
+}
+
+.close-pos-btn:hover {
+  background: var(--red);
+  color: white;
+}
+
+.close-all-btn {
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  background: transparent;
+  border: 1px solid var(--red);
+  color: var(--red);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: var(--radius-sm);
+}
+
+.close-all-btn:hover {
+  background: var(--red);
+  color: white;
+}
+
+#equity-chart-container {
+  margin-top: 8px;
+  height: 40px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+#equity-chart-container canvas {
+  display: block;
 }
 
 /* Order Form */
@@ -939,4 +1030,258 @@ body {
   .connection-status {
     display: none;
   }
+}
+/* Activities Panel */
+.activities-panel {
+  grid-column: 1 / 4;
+  grid-row: 4;
+  min-height: 140px;
+}
+
+.activities-panel .panel-content {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.activity-filter {
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.activity-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.delete-all-btn {
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--danger, #ff3d5a);
+  color: var(--danger, #ff3d5a);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: var(--radius-md);
+}
+
+.delete-all-btn:hover {
+  background: rgba(255, 61, 90, 0.15);
+  color: white;
+  border-color: var(--danger, #ff3d5a);
+}
+
+.activities-table td {
+  padding: 8px 10px;
+}
+
+.activity-type-fill { color: var(--accent); }
+.activity-type-dividend { color: #00ff88; }
+.activity-type-fee { color: #ff3d5a; }
+.activity-type-interest { color: #ffaa00; }
+
+@media (max-width: 1024px) {
+  .activities-panel {
+    grid-column: 1 / 3;
+    grid-row: auto;
+  }
+}
+
+/* Alerts Panel */
+.alerts-panel {
+  grid-column: 1;
+  grid-row: 4;
+  min-height: 140px;
+}
+
+.alerts-panel .panel-content {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.alert-form {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.alert-form input,
+.alert-form select {
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+}
+
+.alert-form input:first-child { width: 60px; }
+.alert-form select { width: 70px; }
+.alert-form input:nth-child(3) { width: 70px; flex: 1; }
+
+.alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alert-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.alert-item.triggered {
+  border-left: 3px solid #00ff88;
+  background: rgba(0, 255, 136, 0.1);
+}
+
+.alert-item .alert-text {
+  color: var(--text-primary);
+}
+
+.alert-item .alert-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+.alert-item .alert-delete:hover {
+  color: var(--danger, #ff3d5a);
+}
+
+/* Order Type Fields */
+.stop-price-row,
+.trailing-amt-row {
+  transition: all 0.2s ease;
+}
+
+/* Modal */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  width: 380px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* Real-time P&L Flash */
+.pos-updated {
+  animation: flashGreen 0.5s ease;
+}
+
+.pos-downdated {
+  animation: flashRed 0.5s ease;
+}
+
+@keyframes flashGreen {
+  0% { background: rgba(0, 255, 136, 0.3); }
+  100% { background: transparent; }
+}
+
+@keyframes flashRed {
+  0% { background: rgba(255, 61, 90, 0.3); }
+  100% { background: transparent; }
+}
+
+/* Order Status Highlights */
+.status-filled { color: #00ff88; }
+.status-partially_filled { color: #ffaa00; }
+.status-new { color: var(--accent); }
+.status-cancelled { color: var(--text-muted); }
+.status-rejected { color: #ff3d5a; }
+
+/* Modify Button */
+.modify-btn {
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+}
+
+.modify-btn:hover {
+  background: var(--accent-subtle);
 }

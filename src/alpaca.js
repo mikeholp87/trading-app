@@ -71,6 +71,44 @@ const cancelOrder = async (orderId) => {
   return response.data;
 };
 
+const replaceOrder = async (orderId, orderData) => {
+  const response = await client.patch(`/v2/orders/${orderId}`, orderData);
+  return response.data;
+};
+
+const closePosition = async (symbol) => {
+  const response = await client.delete(`/v2/positions/${symbol}`);
+  return response.data;
+};
+
+const closeAllPositions = async () => {
+  const response = await client.delete('/v2/positions');
+  return response.data;
+};
+
+const getPortfolioHistory = async (start, end, period, timeframe) => {
+  const params = {};
+  if (start) params.start = start;
+  if (end) params.end = end;
+  if (period) params.period = period;
+  if (timeframe) params.timeframe = timeframe;
+  
+  const response = await client.get('/v2/account/portfolio/history', { params });
+  return response.data;
+};
+
+const getAssets = async (status = 'active', asset_class = 'us_equity') => {
+  const response = await client.get('/v2/assets', {
+    params: { status, asset_class }
+  });
+  return response.data;
+};
+
+const getAsset = async (symbol) => {
+  const response = await client.get(`/v2/assets/${symbol}`);
+  return response.data;
+};
+
 const getBars = async (symbol, timeframe = '1Day', start = null, end = null, limit = 100) => {
   const params = {
     timeframe,
@@ -110,16 +148,62 @@ const getHistoricalBars = async (symbol, timeframe, start, end) => {
   return response.data;
 };
 
+const deleteAllOrders = async () => {
+  const response = await client.delete('/v2/orders');
+  return response.data;
+};
+
+const getActivities = async ({ type, after, until, page_size, page_token } = {}) => {
+  const params = {};
+  if (type) params.type = type;
+  if (after) params.after = after;
+  if (until) params.until = until;
+  if (page_size) params.page_size = page_size;
+  if (page_token) params.page_token = page_token;
+  
+  const response = await client.get('/v2/account/activities', { params });
+  return response.data;
+};
+
+const getLatestTrade = async (symbol) => {
+  const response = await dataClient.get(`/v2/stocks/${symbol.toUpperCase()}/trades/latest`);
+  return response.data;
+};
+
+const getSnapshot = async (symbol) => {
+  const response = await dataClient.get(`/v2/stocks/${symbol.toUpperCase()}/snapshot`);
+  return response.data;
+};
+
+const getSnapshots = async (symbols) => {
+  const symbolsParam = Array.isArray(symbols) ? symbols.join(',') : symbols;
+  const response = await dataClient.get('/v2/stocks/snapshots', {
+    params: { symbols: symbolsParam }
+  });
+  return response.data;
+};
+
 module.exports = {
   getAccount,
   getPositions,
   getOrders,
   placeOrder,
   cancelOrder,
+  replaceOrder,
+  closePosition,
+  closeAllPositions,
+  getPortfolioHistory,
+  getAssets,
+  getAsset,
   getBars,
   getLatestQuote,
   getClock,
   getHistoricalBars,
+  deleteAllOrders,
+  getActivities,
+  getLatestTrade,
+  getSnapshot,
+  getSnapshots,
   createClient,
   createAuthHeaders
 };
