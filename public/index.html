@@ -24,6 +24,9 @@
         <span class="ws-dot" id="ws-dot"></span>
         <span id="ws-status">Connecting...</span>
       </div>
+      <button id="theme-toggle" class="theme-toggle" title="Toggle theme (T)">
+        <span class="theme-icon">&#9790;</span>
+      </button>
     </header>
 
     <main class="dashboard-grid">
@@ -92,6 +95,11 @@
           <button class="ind-btn" data-indicator="bollingerBands" title="Bollinger Bands (20,2)">BB</button>
           <button class="ind-btn" data-indicator="ema50" title="EMA 50">EMA50</button>
           <button class="ind-btn" data-indicator="volumeMa" title="Volume SMA (20)">Vol MA</button>
+          <button class="ind-btn" data-indicator="sma20" title="SMA 20">SMA20</button>
+          <button class="ind-btn" data-indicator="sma50" title="SMA 50">SMA50</button>
+          <button class="ind-btn" data-indicator="atr" title="ATR (14)">ATR</button>
+          <button class="ind-btn" data-indicator="stochastic" title="Stochastic (14,3)">STOCH</button>
+          <button class="ind-btn" data-indicator="vwap" title="VWAP">VWAP</button>
         </div>
       </section>
 
@@ -103,6 +111,7 @@
             <button class="add-btn" id="add-symbol-btn">+</button>
           </div>
         </div>
+        <div class="watchlist-tabs" id="watchlist-tabs"></div>
         <div class="panel-content">
           <table class="data-table watchlist-table">
             <thead>
@@ -118,6 +127,9 @@
             </tbody>
           </table>
         </div>
+        <div class="watchlist-footer">
+          <button class="create-wl-btn" id="create-wl-btn">+ New List</button>
+        </div>
       </section>
 
       <section class="panel positions-panel">
@@ -132,6 +144,7 @@
                 <th>Symbol</th>
                 <th>Qty</th>
                 <th>Avg Entry</th>
+                <th>Total Cost</th>
                 <th>Current</th>
                 <th>Market Value</th>
                 <th>Unrealized P&L</th>
@@ -141,7 +154,7 @@
             </thead>
             <tbody id="positions-body">
               <tr class="empty-row">
-                <td colspan="7">No open positions</td>
+                <td colspan="9">No open positions</td>
               </tr>
             </tbody>
           </table>
@@ -298,6 +311,24 @@
         </div>
       </section>
 
+      <!-- Note Modal -->
+      <div id="note-modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 id="note-modal-title">Note</h3>
+            <button class="modal-close" id="close-note-modal">&times;</button>
+          </div>
+          <div class="note-form">
+            <input type="hidden" id="note-symbol">
+            <textarea id="note-textarea" placeholder="Enter your notes for this symbol..." rows="5"></textarea>
+            <div class="note-actions">
+              <button class="delete-note-btn" id="delete-note-btn">Delete Note</button>
+              <button class="save-note-btn" id="save-note-btn">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Modify Order Modal -->
       <div id="modify-order-modal" class="modal hidden">
         <div class="modal-content">
@@ -339,6 +370,88 @@
             </div>
             <div class="order-feedback" id="modify-feedback"></div>
           </form>
+        </div>
+      <!-- Keyboard Shortcuts Modal -->
+      <div id="shortcuts-modal" class="modal hidden">
+        <div class="modal-content shortcuts-modal-content">
+          <div class="modal-header">
+            <h3>Keyboard Shortcuts</h3>
+            <button class="modal-close" id="close-shortcuts-modal">&times;</button>
+          </div>
+          <div class="shortcuts-list">
+            <div class="shortcut-section">
+              <h4>General</h4>
+              <div class="shortcut-item">
+                <kbd>T</kbd>
+                <span>Toggle dark/light theme</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>?</kbd>
+                <span>Show keyboard shortcuts</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>Esc</kbd>
+                <span>Close modal / Cancel action</span>
+              </div>
+            </div>
+            <div class="shortcut-section">
+              <h4>Chart</h4>
+              <div class="shortcut-item">
+                <kbd>Enter</kbd>
+                <span>Load symbol from input</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>1</kbd>
+                <span>1D timeframe</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>5</kbd>
+                <span>5D timeframe</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>M</kbd>
+                <span>1M timeframe</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>3</kbd>
+                <span>3M timeframe</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>Y</kbd>
+                <span>1Y timeframe</span>
+              </div>
+            </div>
+            <div class="shortcut-section">
+              <h4>Order Entry</h4>
+              <div class="shortcut-item">
+                <kbd>B</kbd>
+                <span>Switch to BUY side</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>S</kbd>
+                <span>Switch to SELL side</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
+                <span>Submit order</span>
+              </div>
+            </div>
+            <div class="shortcut-section">
+              <h4>Data Refresh</h4>
+              <div class="shortcut-item">
+                <kbd>R</kbd>
+                <span>Refresh positions</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>Shift</kbd>+<kbd>R</kbd>
+                <span>Refresh all data</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>O</kbd>
+                <span>Refresh orders</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>

@@ -6,9 +6,14 @@ let state = {
   orders: [],
   activities: [],
   clock: null,
-  watchlist: DEFAULT_WATCHLIST.slice(),
+  // Multi-watchlist support
+  watchlists: {}, // { "My Watchlist": ["AAPL", "TSLA"], "Tech": ["NVDA", "MSFT"] }
+  activeWatchlist: 'Default',
+  watchlist: [], // current active watchlist symbols (alias)
   watchlistQuotes: {},
   currentSymbol: 'SPY',
+  // Symbol notes
+  symbolNotes: {}, // { "AAPL": "Strong buy, earnings coming up", "TSLA": "Watch for split news" }
   timeframe: '1D',
   chartType: 'candle',
   isConnected: false,
@@ -26,13 +31,25 @@ let state = {
   bbLowerSeries: null,
   ema50Series: null,
   volumeMaSeries: null,
+  // New indicator series
+  sma20Series: null,
+  sma50Series: null,
+  atrSeries: null,
+  stochasticKSeries: null,
+  stochasticDSeries: null,
+  vwapSeries: null,
   // Indicator state
   indicators: {
     rsi: false,
     macd: false,
     bollingerBands: false,
     ema50: false,
-    volumeMa: false
+    volumeMa: false,
+    sma20: false,
+    sma50: false,
+    atr: false,
+    stochastic: false,
+    vwap: false
   },
   // Indicator panes (for separate oscillators)
   rsiPane: null,
@@ -678,6 +695,12 @@ const initChart = () => {
     state.bbLowerSeries = null;
     state.ema50Series = null;
     state.volumeMaSeries = null;
+    state.sma20Series = null;
+    state.sma50Series = null;
+    state.atrSeries = null;
+    state.stochasticKSeries = null;
+    state.stochasticDSeries = null;
+    state.vwapSeries = null;
     state.rsiPane = null;
     state.macdPane = null;
 
@@ -687,6 +710,11 @@ const initChart = () => {
     state.indicators.bollingerBands = false;
     state.indicators.ema50 = false;
     state.indicators.volumeMa = false;
+    state.indicators.sma20 = false;
+    state.indicators.sma50 = false;
+    state.indicators.atr = false;
+    state.indicators.stochastic = false;
+    state.indicators.vwap = false;
 
     // Create series based on current chart type
     createSeriesForType(state.chartType);
@@ -1304,6 +1332,111 @@ const calculateVolumeSMA = (volumes, period = 20) => {
   return sma;
 };
 
+// SMA (Simple Moving Average) calculation
+const calculateSMA = (values, period) => {
+  const sma = [];
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) {
+      sma.push(null);
+    } else {
+      const slice = values.slice(i - period + 1, i + 1);
+      sma.push(slice.reduce((a, b) => a + b, 0) / period);
+    }
+  }
+  return sma;
+};
+
+// ATR (Average True Range) calculation
+const calculateATR = (bars, period = 14) => {
+  const atr = [];
+  const trueRanges = [];
+  
+  for (let i = 0; i < bars.length; i++) {
+    if (i === 0) {
+      trueRanges.push(bars[i].high - bars[i].low);
+      atr.push(null);
+    } else {
+      const tr = Math.max(
+        bars[i].high - bars[i].low,
+        Math.abs(bars[i].high - bars[i - 1].close),
+        Math.abs(bars[i].low - bars[i - 1].close)
+      );
+      trueRanges.push(tr);
+      
+      if (i < period - 1) {
+        atr.push(null);
+      } else if (i === period - 1) {
+        const sum = trueRanges.slice(0, period).reduce((a, b) => a + b, 0);
+        atr.push(sum / period);
+      } else {
+        atr.push((atr[i - 1] * (period - 1) + trueRanges[i]) / period);
+      }
+    }
+  }
+  return atr;
+};
+
+// Stochastic Oscillator calculation - returns { k, d }
+const calculateStochastic = (bars, kPeriod = 14, dPeriod = 3) => {
+  const k = [];
+  const d = [];
+  
+  for (let i = 0; i < bars.length; i++) {
+    if (i < kPeriod - 1) {
+      k.push(null);
+      d.push(null);
+    } else {
+      let highest = -Infinity;
+      let lowest = Infinity;
+      
+      for (let j = i - kPeriod + 1; j <= i; j++) {
+        highest = Math.max(highest, bars[j].high);
+        lowest = Math.min(lowest, bars[j].low);
+      }
+      
+      const range = highest - lowest;
+      if (range === 0) {
+        k.push(50);
+      } else {
+        k.push(((bars[i].close - lowest) / range) * 100);
+      }
+    }
+  }
+  
+  // Calculate %D (SMA of %K)
+  for (let i = 0; i < k.length; i++) {
+    if (i < kPeriod - 1 + dPeriod - 1) {
+      d.push(null);
+    } else {
+      const slice = k.slice(i - dPeriod + 1, i + 1);
+      const validValues = slice.filter(v => v !== null);
+      d.push(validValues.length === dPeriod ? validValues.reduce((a, b) => a + b, 0) / dPeriod : null);
+    }
+  }
+  
+  return { k, d };
+};
+
+// VWAP (Volume Weighted Average Price) calculation
+const calculateVWAP = (bars) => {
+  const vwap = [];
+  let cumulativeTPV = 0;  // cumulative (Typical Price * Volume)
+  let cumulativeVolume = 0;
+  
+  for (let i = 0; i < bars.length; i++) {
+    const typicalPrice = (bars[i].high + bars[i].low + bars[i].close) / 3;
+    cumulativeTPV += typicalPrice * (bars[i].volume || 0);
+    cumulativeVolume += (bars[i].volume || 0);
+    
+    if (cumulativeVolume === 0) {
+      vwap.push(null);
+    } else {
+      vwap.push(cumulativeTPV / cumulativeVolume);
+    }
+  }
+  return vwap;
+};
+
 // === Indicator Toggle Functions ===
 
 const toggleIndicator = (indicatorName) => {
@@ -1335,6 +1468,21 @@ const toggleIndicator = (indicatorName) => {
     case 'volumeMa':
       toggleVolumeMA(enabled);
       break;
+    case 'sma20':
+      toggleSMA20(enabled);
+      break;
+    case 'sma50':
+      toggleSMA50(enabled);
+      break;
+    case 'atr':
+      toggleATR(enabled);
+      break;
+    case 'stochastic':
+      toggleStochastic(enabled);
+      break;
+    case 'vwap':
+      toggleVWAP(enabled);
+      break;
   }
 };
 
@@ -1344,7 +1492,9 @@ const removeAllIndicators = () => {
     'rsiSeries', 'rsiPane',
     'macdHistogramSeries', 'macdLineSeries', 'macdSignalSeries', 'macdPane',
     'bbUpperSeries', 'bbMiddleSeries', 'bbLowerSeries',
-    'ema50Series', 'volumeMaSeries'
+    'ema50Series', 'volumeMaSeries',
+    'sma20Series', 'sma50Series', 'atrSeries',
+    'stochasticKSeries', 'stochasticDSeries', 'vwapSeries'
   ];
   seriesMap.forEach(key => {
     if (state[key]) {
@@ -1537,6 +1687,136 @@ const toggleVolumeMA = (enabled) => {
   }
 };
 
+// Toggle SMA 20
+const toggleSMA20 = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    if (state.sma20Series) { try { state.chart.removeSeries(state.sma20Series); } catch(e) {} state.sma20Series = null; }
+
+    state.sma20Series = state.chart.addLineSeries({
+      color: '#22d3ee',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    const closes = state.rawBars.map(b => b.close);
+    const sma20 = calculateSMA(closes, 20);
+    state.sma20Series.setData(state.rawBars.map((b, i) => ({ time: b.time, value: sma20[i] })).filter(d => d.value !== null));
+  } else {
+    if (state.sma20Series) { try { state.chart.removeSeries(state.sma20Series); } catch(e) {} state.sma20Series = null; }
+  }
+};
+
+// Toggle SMA 50
+const toggleSMA50 = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    if (state.sma50Series) { try { state.chart.removeSeries(state.sma50Series); } catch(e) {} state.sma50Series = null; }
+
+    state.sma50Series = state.chart.addLineSeries({
+      color: '#fb923c',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    const closes = state.rawBars.map(b => b.close);
+    const sma50 = calculateSMA(closes, 50);
+    state.sma50Series.setData(state.rawBars.map((b, i) => ({ time: b.time, value: sma50[i] })).filter(d => d.value !== null));
+  } else {
+    if (state.sma50Series) { try { state.chart.removeSeries(state.sma50Series); } catch(e) {} state.sma50Series = null; }
+  }
+};
+
+// Toggle ATR
+const toggleATR = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    if (state.atrSeries) { try { state.chart.removeSeries(state.atrSeries); } catch(e) {} state.atrSeries = null; }
+
+    state.atrSeries = state.chart.addLineSeries({
+      color: '#a78bfa',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    const atr = calculateATR(state.rawBars, 14);
+    state.atrSeries.setData(state.rawBars.map((b, i) => ({ time: b.time, value: atr[i] })).filter(d => d.value !== null));
+  } else {
+    if (state.atrSeries) { try { state.chart.removeSeries(state.atrSeries); } catch(e) {} state.atrSeries = null; }
+  }
+};
+
+// Toggle Stochastic
+const toggleStochastic = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    ['stochasticKSeries', 'stochasticDSeries'].forEach(k => {
+      if (state[k]) { try { state.chart.removeSeries(state[k]); } catch(e) {} state[k] = null; }
+    });
+
+    state.stochasticKSeries = state.chart.addLineSeries({
+      color: '#f472b6',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      scaleMargins: { top: 0.85, bottom: 0.1 }
+    });
+
+    state.stochasticDSeries = state.chart.addLineSeries({
+      color: '#facc15',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      scaleMargins: { top: 0.85, bottom: 0.1 }
+    });
+
+    const stoch = calculateStochastic(state.rawBars, 14, 3);
+
+    state.stochasticKSeries.setData(state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: stoch.k[i]
+    })).filter(d => d.value !== null));
+
+    state.stochasticDSeries.setData(state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: stoch.d[i]
+    })).filter(d => d.value !== null));
+  } else {
+    ['stochasticKSeries', 'stochasticDSeries'].forEach(k => {
+      if (state[k]) { try { state.chart.removeSeries(state[k]); } catch(e) {} state[k] = null; }
+    });
+  }
+};
+
+// Toggle VWAP
+const toggleVWAP = (enabled) => {
+  if (!state.chart) return;
+
+  if (enabled) {
+    if (state.vwapSeries) { try { state.chart.removeSeries(state.vwapSeries); } catch(e) {} state.vwapSeries = null; }
+
+    state.vwapSeries = state.chart.addLineSeries({
+      color: '#4ade80',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false
+    });
+
+    const vwap = calculateVWAP(state.rawBars);
+    state.vwapSeries.setData(state.rawBars.map((b, i) => ({ time: b.time, value: vwap[i] })).filter(d => d.value !== null));
+  } else {
+    if (state.vwapSeries) { try { state.chart.removeSeries(state.vwapSeries); } catch(e) {} state.vwapSeries = null; }
+  }
+};
+
 
 // Update indicator data when chart is updated
 const updateIndicatorData = () => {
@@ -1622,6 +1902,59 @@ const updateIndicatorData = () => {
     })).filter(d => d.value !== null);
     state.volumeMaSeries.setData(data);
   }
+
+  // Update SMA 20
+  if (state.sma20Series && state.indicators.sma20) {
+    const sma20 = calculateSMA(closes, 20);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: sma20[i]
+    })).filter(d => d.value !== null);
+    state.sma20Series.setData(data);
+  }
+
+  // Update SMA 50
+  if (state.sma50Series && state.indicators.sma50) {
+    const sma50 = calculateSMA(closes, 50);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: sma50[i]
+    })).filter(d => d.value !== null);
+    state.sma50Series.setData(data);
+  }
+
+  // Update ATR
+  if (state.atrSeries && state.indicators.atr) {
+    const atr = calculateATR(state.rawBars, 14);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: atr[i]
+    })).filter(d => d.value !== null);
+    state.atrSeries.setData(data);
+  }
+
+  // Update Stochastic
+  if (state.stochasticKSeries && state.indicators.stochastic) {
+    const stoch = calculateStochastic(state.rawBars, 14, 3);
+    state.stochasticKSeries.setData(state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: stoch.k[i]
+    })).filter(d => d.value !== null));
+    state.stochasticDSeries.setData(state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: stoch.d[i]
+    })).filter(d => d.value !== null));
+  }
+
+  // Update VWAP
+  if (state.vwapSeries && state.indicators.vwap) {
+    const vwap = calculateVWAP(state.rawBars);
+    const data = state.rawBars.map((b, i) => ({
+      time: b.time,
+      value: vwap[i]
+    })).filter(d => d.value !== null);
+    state.vwapSeries.setData(data);
+  }
 };
 
 // Disable all indicators (used when reinitializing chart)
@@ -1697,6 +2030,30 @@ const renderClock = () => {
   }
 };
 
+// Render watchlist tabs (the selector at top)
+const renderWatchlistTabs = () => {
+  const container = document.getElementById('watchlist-tabs');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  
+  Object.keys(state.watchlists).forEach(name => {
+    const tab = document.createElement('div');
+    tab.className = 'wl-tab' + (name === state.activeWatchlist ? ' active' : '');
+    tab.dataset.wl = name;
+    tab.title = state.watchlists[name].length + ' symbols';
+    
+    // Show name, truncate if long
+    const displayName = name.length > 12 ? name.substring(0, 10) + '...' : name;
+    tab.innerHTML = `
+      <span class="wl-tab-name">${displayName}</span>
+      <span class="wl-tab-count">${state.watchlists[name].length}</span>
+    `;
+    
+    container.appendChild(tab);
+  });
+};
+
 const renderWatchlist = () => {
   const tbody = document.getElementById('watchlist-body');
   tbody.innerHTML = '';
@@ -1709,12 +2066,14 @@ const renderWatchlist = () => {
   state.watchlist.forEach(symbol => {
     const quote = state.watchlistQuotes[symbol] || {};
     const hasPosition = positionsBySymbol[symbol];
+    const hasNote = state.symbolNotes[symbol] && state.symbolNotes[symbol].trim().length > 0;
     
     const row = document.createElement('tr');
     row.className = 'watchlist-row' + (hasPosition ? ' has-position' : '');
     row.dataset.symbol = symbol;
     row.onclick = (e) => {
-      if (e.target.classList.contains('remove-wl-btn')) return;
+      if (e.target.classList.contains('remove-wl-btn') || 
+          e.target.classList.contains('note-btn')) return;
       state.currentSymbol = symbol;
       document.getElementById('chart-symbol').value = symbol;
       loadChart(symbol, state.timeframe);
@@ -1729,6 +2088,7 @@ const renderWatchlist = () => {
       <td class="symbol-cell">
         <span class="remove-wl-btn" data-symbol="${symbol}" title="Remove">&times;</span>
         ${symbol}
+        <span class="note-btn ${hasNote ? 'has-note' : ''}" data-symbol="${symbol}" title="${hasNote ? 'View/Edit Note' : 'Add Note'}">&#9998;</span>
       </td>
       <td>${bid ? formatNumber(bid, 2) : '--'}</td>
       <td>${ask ? formatNumber(ask, 2) : '--'}</td>
@@ -1750,13 +2110,22 @@ const renderWatchlist = () => {
       }
     };
   });
+  
+  // Bind note buttons
+  tbody.querySelectorAll('.note-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const sym = btn.dataset.symbol;
+      openNoteModal(sym);
+    };
+  });
 };
 
 const renderPositions = () => {
   const tbody = document.getElementById('positions-body');
   
   if (!state.positions || state.positions.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No open positions</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No open positions</td></tr>';
     console.log('[UI] No positions to display');
     return;
   }
@@ -1783,6 +2152,7 @@ const renderPositions = () => {
       <td class="symbol-cell">${pos.symbol}</td>
       <td>${pos.qty}</td>
       <td>${formatMoney(avgEntry)}</td>
+      <td>${formatMoney(avgEntry * parseFloat(pos.qty))}</td>
       <td>${formatMoney(currentPrice)}</td>
       <td>${formatMoney(marketValue)}</td>
       <td class="${unrealizedPL >= 0 ? 'positive' : 'negative'}">${formatMoney(unrealizedPL)}</td>
@@ -1891,13 +2261,10 @@ const addToWatchlist = () => {
   const symbol = input.value.toUpperCase().trim();
   
   if (symbol && !state.watchlist.includes(symbol)) {
-    if (state.watchlist.length >= 12) {
-      alert('Maximum 12 symbols allowed');
-      return;
-    }
     state.watchlist.push(symbol);
+    state.watchlists[state.activeWatchlist] = state.watchlist;
+    localStorage.setItem('watchlists', JSON.stringify(state.watchlists));
     input.value = '';
-    localStorage.setItem('watchlist', JSON.stringify(state.watchlist));
     
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify({
@@ -1939,9 +2306,121 @@ const removeFromWatchlist = (symbol) => {
   const idx = state.watchlist.indexOf(symbol);
   if (idx > -1) {
     state.watchlist.splice(idx, 1);
+    state.watchlists[state.activeWatchlist] = state.watchlist;
+    localStorage.setItem('watchlists', JSON.stringify(state.watchlists));
     delete state.watchlistQuotes[symbol];
-    localStorage.setItem('watchlist', JSON.stringify(state.watchlist));
     renderWatchlist();
+  }
+};
+
+// Switch active watchlist
+const switchWatchlist = (name) => {
+  if (!state.watchlists[name]) return;
+  
+  state.activeWatchlist = name;
+  state.watchlist = state.watchlists[name];
+  localStorage.setItem('activeWatchlist', name);
+  
+  // Update WebSocket subscription
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({
+      type: 'subscribe',
+      symbols: state.watchlist
+    }));
+  }
+  
+  // Clear quotes for symbols not in new watchlist
+  Object.keys(state.watchlistQuotes).forEach(sym => {
+    if (state.watchlist.indexOf(sym) === -1) {
+      delete state.watchlistQuotes[sym];
+    }
+  });
+  
+  renderWatchlistTabs();
+  renderWatchlist();
+  loadSnapshots();
+};
+
+// Create new watchlist
+const createWatchlist = (name) => {
+  if (!name || state.watchlists[name]) return;
+  
+  state.watchlists[name] = [];
+  localStorage.setItem('watchlists', JSON.stringify(state.watchlists));
+  switchWatchlist(name);
+  renderWatchlistTabs();
+};
+
+// Delete a watchlist
+const deleteWatchlist = (name) => {
+  if (Object.keys(state.watchlists).length <= 1) {
+    alert('Cannot delete the last watchlist');
+    return;
+  }
+  
+  if (!confirm(`Delete watchlist "${name}"?`)) return;
+  
+  delete state.watchlists[name];
+  localStorage.setItem('watchlists', JSON.stringify(state.watchlists));
+  
+  if (state.activeWatchlist === name) {
+    const firstKey = Object.keys(state.watchlists)[0];
+    switchWatchlist(firstKey);
+  }
+  
+  renderWatchlistTabs();
+};
+
+// Rename a watchlist
+const renameWatchlist = (oldName, newName) => {
+  if (!newName || state.watchlists[newName]) return;
+  if (oldName === newName) return;
+  
+  state.watchlists[newName] = state.watchlists[oldName];
+  delete state.watchlists[oldName];
+  localStorage.setItem('watchlists', JSON.stringify(state.watchlists));
+  
+  if (state.activeWatchlist === oldName) {
+    state.activeWatchlist = newName;
+    localStorage.setItem('activeWatchlist', newName);
+  }
+  
+  renderWatchlistTabs();
+};
+
+// Save symbol note
+const saveSymbolNote = (symbol, note) => {
+  if (!note || !note.trim()) {
+    delete state.symbolNotes[symbol];
+  } else {
+    state.symbolNotes[symbol] = note.trim();
+  }
+  localStorage.setItem('symbolNotes', JSON.stringify(state.symbolNotes));
+  renderWatchlist();
+};
+
+// Open note modal for a symbol
+const openNoteModal = (symbol) => {
+  const modal = document.getElementById('note-modal');
+  const title = document.getElementById('note-modal-title');
+  const textarea = document.getElementById('note-textarea');
+  const symbolInput = document.getElementById('note-symbol');
+  
+  if (!modal) return;
+  
+  title.textContent = `Note for ${symbol}`;
+  symbolInput.value = symbol;
+  textarea.value = state.symbolNotes[symbol] || '';
+  
+  modal.classList.remove('hidden');
+  textarea.focus();
+};
+
+// Close note modal
+const closeNoteModal = () => {
+  const modal = document.getElementById('note-modal');
+  if (modal) {
+    modal.classList.add('hidden');
   }
 };
 
@@ -2252,15 +2731,74 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
       renderAlerts();
     }
   });
+
+  // Theme toggle button
+  document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+  // Keyboard shortcuts modal
+  document.getElementById('close-shortcuts-modal').addEventListener('click', closeShortcutsModal);
+  document.getElementById('shortcuts-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'shortcuts-modal') {
+      closeShortcutsModal();
+    }
+  });
+  
+  // Note modal events
+  document.getElementById('close-note-modal').addEventListener('click', closeNoteModal);
+  document.getElementById('note-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'note-modal') {
+      closeNoteModal();
+    }
+  });
+  document.getElementById('save-note-btn').addEventListener('click', () => {
+    const symbol = document.getElementById('note-symbol').value;
+    const note = document.getElementById('note-textarea').value;
+    saveSymbolNote(symbol, note);
+    closeNoteModal();
+  });
+  document.getElementById('delete-note-btn').addEventListener('click', () => {
+    const symbol = document.getElementById('note-symbol').value;
+    saveSymbolNote(symbol, '');
+    closeNoteModal();
+  });
+  
+  // Watchlist tabs events
+  document.getElementById('watchlist-tabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('.wl-tab');
+    if (tab) {
+      switchWatchlist(tab.dataset.wl);
+    }
+  });
+  
+  // Create watchlist button
+  document.getElementById('create-wl-btn').addEventListener('click', () => {
+    const name = prompt('Enter watchlist name:');
+    if (name) createWatchlist(name.trim());
+  });
 };
 
 const init = async () => {
-  const saved = localStorage.getItem('watchlist');
-  if (saved) {
+  // Load watchlists from localStorage
+  const savedWatchlists = localStorage.getItem('watchlists');
+  if (savedWatchlists) {
     try {
-      state.watchlist = JSON.parse(saved);
-    } catch (e) {}
+      state.watchlists = JSON.parse(savedWatchlists);
+    } catch (e) {
+      state.watchlists = { 'Default': DEFAULT_WATCHLIST.slice() };
+    }
+  } else {
+    state.watchlists = { 'Default': DEFAULT_WATCHLIST.slice() };
   }
+  
+  // Load active watchlist name
+  const savedActive = localStorage.getItem('activeWatchlist');
+  state.activeWatchlist = savedActive || 'Default';
+  
+  // Set current watchlist symbols from active watchlist
+  state.watchlist = state.watchlists[state.activeWatchlist] || [];
+  
+  // Initialize theme
+  applyTheme(getStoredTheme());
 
   // Request notification permission
   if ('Notification' in window && Notification.permission === 'default') {
@@ -2268,9 +2806,11 @@ const init = async () => {
   }
 
   bindEvents();
+  initKeyboardShortcuts();
   initWebSocket();
   initResizable();
   renderAlerts();
+  renderWatchlistTabs();
   await render();
   
   setInterval(loadPositions, 10000);
@@ -2280,3 +2820,149 @@ const init = async () => {
 };
 
 document.addEventListener('DOMContentLoaded', init);
+
+// Theme Management
+const getStoredTheme = () => localStorage.getItem('theme') || 'dark';
+const applyTheme = (theme) => {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('theme', theme);
+  updateThemeIcon(theme);
+};
+
+const updateThemeIcon = (theme) => {
+  const icon = document.querySelector('.theme-icon');
+  if (icon) {
+    icon.innerHTML = theme === 'dark' ? '&#9790;' : '&#9728;';
+  }
+};
+
+const toggleTheme = () => {
+  const current = getStoredTheme();
+  const newTheme = current === 'dark' ? 'light' : 'dark';
+  applyTheme(newTheme);
+};
+
+// Keyboard Shortcuts
+const shortcutsModal = () => {
+  const modal = document.getElementById('shortcuts-modal');
+  if (modal) modal.classList.remove('hidden');
+};
+const closeShortcutsModal = () => {
+  const modal = document.getElementById('shortcuts-modal');
+  if (modal) modal.classList.add('hidden');
+};
+
+// Check if focus is in an input/textarea/select element
+const isInputFocused = () => {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select';
+};
+
+// Global keyboard handler (fires only when no input is focused)
+const initKeyboardShortcuts = () => {
+  document.addEventListener('keydown', (e) => {
+    // Always allow closing modals with Escape
+    if (e.key === 'Escape') {
+      closeShortcutsModal();
+      const modifyModal = document.getElementById('modify-order-modal');
+      if (modifyModal && !modifyModal.classList.contains('hidden')) {
+        modifyModal.classList.add('hidden');
+      }
+      closeNoteModal();
+      return;
+    }
+
+    // Don't handle shortcuts when typing in input fields
+    if (isInputFocused()) return;
+
+    // Toggle theme
+    if (e.key === 't' || e.key === 'T') {
+      e.preventDefault();
+      toggleTheme();
+      return;
+    }
+
+    // Show keyboard shortcuts
+    if (e.key === '?') {
+      e.preventDefault();
+      shortcutsModal();
+      return;
+    }
+
+    // Refresh positions
+    if (e.key === 'r' || e.key === 'R') {
+      if (e.shiftKey) {
+        // Refresh all
+        loadPositions();
+        loadOrders();
+        loadAccount();
+        loadActivities();
+        loadSnapshots();
+      } else {
+        loadPositions();
+      }
+      return;
+    }
+
+    // Refresh orders
+    if (e.key === 'o' || e.key === 'O') {
+      loadOrders();
+      return;
+    }
+
+    // Timeframe shortcuts
+    if (e.key === '1') {
+      setTimeframe('1D');
+      return;
+    }
+    if (e.key === '5') {
+      setTimeframe('5D');
+      return;
+    }
+    if (e.key === 'm' || e.key === 'M') {
+      if (!e.ctrlKey && !e.metaKey) {
+        setTimeframe('1M');
+        return;
+      }
+    }
+    if (e.key === '3') {
+      setTimeframe('3M');
+      return;
+    }
+    if (e.key === 'y' || e.key === 'Y') {
+      setTimeframe('1Y');
+      return;
+    }
+
+    // Order side shortcuts
+    if (e.key === 'b' || e.key === 'B') {
+      document.querySelectorAll('.side-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.side === 'buy') btn.classList.add('active');
+      });
+      return;
+    }
+    if (e.key === 's' || e.key === 'S') {
+      document.querySelectorAll('.side-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.side === 'sell') btn.classList.add('active');
+      });
+      return;
+    }
+  });
+};
+
+const setTimeframe = (tf) => {
+  document.querySelectorAll('.tf-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tf === tf);
+  });
+  state.timeframe = tf;
+  loadChartData(state.currentSymbol, tf, state.chartType);
+};
+
+// Initialize theme on load
+document.addEventListener('DOMContentLoaded', () => {
+  applyTheme(getStoredTheme());
+});
