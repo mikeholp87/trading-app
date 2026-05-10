@@ -1,5 +1,32 @@
 const DEFAULT_WATCHLIST = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'SPY', 'QQQ', 'AMZN', 'GOOGL'];
 
+// Utility: debounce
+const debounce = (fn, wait) => {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+};
+
+// Input validators
+const validateSymbol = (str) => /^[A-Z]{1,5}$/.test(str);
+const validateQty = (n) => Number.isInteger(n) && n > 0;
+const validatePrice = (n) => typeof n === 'number' && !isNaN(n) && n > 0;
+
+// Toast notification system
+const showToast = (msg, type = 'info', duration = 4000) => {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  const icons = { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' };
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ'}</span><span class="toast-msg">${msg}</span><button class="toast-close" aria-label="dismiss">×</button>`;
+  toast.querySelector('.toast-close').onclick = () => { toast.classList.add('toast-out'); setTimeout(() => toast.remove(), 250); };
+  container.appendChild(toast);
+  if (duration > 0) setTimeout(() => { if (toast.parentNode) { toast.classList.add('toast-out'); setTimeout(() => toast.remove(), 250); } }, duration);
+};
+
 let state = {
   account: null,
   positions: [],
@@ -85,12 +112,11 @@ const formatNumber = (value, decimals = 2) => {
 };
 
 const formatDate = (dateStr) => {
+  if (!dateStr) return '--';
   const date = new Date(dateStr);
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+  if (isNaN(date.getTime())) return '--';
+  return date.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
   });
 };
 
@@ -385,11 +411,11 @@ const deleteOrder = async (orderId) => {
       console.log('[API] Order cancelled:', orderId);
       loadOrders();
     } else {
-      alert(result.error || 'Failed to cancel order');
+      showToast(result.error || 'Failed to cancel order', 'error');
     }
   } catch (e) {
     console.error('[API] Failed to cancel order:', e);
-    alert('Failed to cancel order');
+    showToast('Failed to cancel order', 'error');
   }
 };
 
@@ -403,11 +429,11 @@ const deleteAllOrders = async () => {
       console.log('[API] All orders deleted');
       loadOrders();
     } else {
-      alert(result.error || 'Failed to delete orders');
+      showToast(result.error || 'Failed to delete orders', 'error');
     }
   } catch (e) {
     console.error('[API] Failed to delete all orders:', e);
-    alert('Failed to delete all orders');
+    showToast('Failed to delete all orders', 'error');
   }
 };
 
@@ -2175,10 +2201,10 @@ const renderPositions = () => {
             loadPositions();
             loadAccount();
           } else {
-            alert(result.error || 'Failed to close position');
+            showToast(result.error || 'Failed to close position', 'error');
           }
         } catch (e) {
-          alert('Failed to close position');
+          showToast('Failed to close position', 'error');
         }
       }
     };
@@ -2354,7 +2380,7 @@ const createWatchlist = (name) => {
 // Delete a watchlist
 const deleteWatchlist = (name) => {
   if (Object.keys(state.watchlists).length <= 1) {
-    alert('Cannot delete the last watchlist');
+    showToast('Cannot delete the last watchlist', 'warning');
     return;
   }
   
@@ -2586,33 +2612,27 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
     trailRow.classList.toggle('hidden', type !== 'trailing_stop');
 });
 
-  // Update order estimate when symbol, qty, or price changes
-  const updateOrderEstimate = () => {
-    const symbol = document.getElementById('order-symbol')?.value?.toUpperCase() || '';
+  // Update order estimate when symbol, qty, or price changes (debounced 150ms)
+  const _doEstimate = () => {
+    const symbol = (document.getElementById('order-symbol')?.value || '').toUpperCase();
     const qty = parseInt(document.getElementById('order-qty')?.value) || 0;
     const limitPrice = parseFloat(document.getElementById('limit-price')?.value);
     const stopPrice = parseFloat(document.getElementById('stop-price')?.value);
     const type = document.getElementById('order-type')?.value;
-
+    const symInput = document.getElementById('order-symbol');
+    if (symInput && symbol && !validateSymbol(symbol)) { symInput.style.borderColor = 'var(--red)'; }
+    else if (symInput) { symInput.style.borderColor = ''; }
     let price = null;
-    if (type === 'market') {
-      const quote = state.watchlistQuotes[symbol];
-      price = quote?.last || quote?.ask;
-    } else if (type === 'limit' && limitPrice) {
-      price = limitPrice;
-    } else if (type === 'stop' && stopPrice) {
-      price = stopPrice;
-    } else if (type === 'stop_limit') {
-      price = limitPrice || null;
-    } else {
-      const quote = state.watchlistQuotes[symbol];
-      price = quote?.last || quote?.ask;
-    }
-
+    if (type === 'market') { const q = state.watchlistQuotes[symbol]; price = q?.last || q?.ask; }
+    else if (type === 'limit' && limitPrice) { price = limitPrice; }
+    else if (type === 'stop' && stopPrice) { price = stopPrice; }
+    else if (type === 'stop_limit') { price = limitPrice || null; }
+    else { const q = state.watchlistQuotes[symbol]; price = q?.last || q?.ask; }
     const estimate = (price && qty > 0) ? (price * qty) : 0;
     const el = document.getElementById('order-estimate');
     if (el) el.textContent = formatMoney(estimate);
   };
+  const updateOrderEstimate = debounce(_doEstimate, 150);
 
   ['order-symbol', 'order-qty', 'limit-price', 'stop-price'].forEach(id => {
     const el = document.getElementById(id);
@@ -2736,7 +2756,7 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
     const price = parseFloat(document.getElementById('alert-price').value);
     
     if (!symbol || isNaN(price) || price <= 0) {
-      alert('Enter a valid symbol and price');
+      showToast('Enter a valid symbol and price', 'warning');
       return;
     }
     
