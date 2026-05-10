@@ -2584,8 +2584,43 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
     limitRow.classList.toggle('hidden', type !== 'limit' && type !== 'stop_limit' && type !== 'take_profit');
     stopRow.classList.toggle('hidden', type !== 'stop' && type !== 'stop_limit');
     trailRow.classList.toggle('hidden', type !== 'trailing_stop');
+});
+
+  // Update order estimate when symbol, qty, or price changes
+  const updateOrderEstimate = () => {
+    const symbol = document.getElementById('order-symbol')?.value?.toUpperCase() || '';
+    const qty = parseInt(document.getElementById('order-qty')?.value) || 0;
+    const limitPrice = parseFloat(document.getElementById('limit-price')?.value);
+    const stopPrice = parseFloat(document.getElementById('stop-price')?.value);
+    const type = document.getElementById('order-type')?.value;
+
+    let price = null;
+    if (type === 'market') {
+      const quote = state.watchlistQuotes[symbol];
+      price = quote?.last || quote?.ask;
+    } else if (type === 'limit' && limitPrice) {
+      price = limitPrice;
+    } else if (type === 'stop' && stopPrice) {
+      price = stopPrice;
+    } else if (type === 'stop_limit') {
+      price = limitPrice || null;
+    } else {
+      const quote = state.watchlistQuotes[symbol];
+      price = quote?.last || quote?.ask;
+    }
+
+    const estimate = (price && qty > 0) ? (price * qty) : 0;
+    const el = document.getElementById('order-estimate');
+    if (el) el.textContent = formatMoney(estimate);
+  };
+
+  ['order-symbol', 'order-qty', 'limit-price', 'stop-price'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateOrderEstimate);
   });
-  
+  const orderTypeSel = document.getElementById('order-type');
+  if (orderTypeSel) orderTypeSel.addEventListener('change', updateOrderEstimate);
+
   document.querySelectorAll('.side-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       document.querySelectorAll('.side-btn').forEach(b => b.classList.remove('active'));

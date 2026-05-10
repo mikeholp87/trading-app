@@ -216,7 +216,7 @@ body {
 .dashboard-grid {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
-  grid-template-rows: minmax(140px, auto) minmax(250px, 1fr) minmax(140px, auto);
+  grid-template-rows: minmax(140px, auto) minmax(250px, 1fr) minmax(160px, auto) minmax(160px, auto);
   gap: 2px;
   padding: 2px;
   background: var(--border-subtle);
@@ -314,7 +314,8 @@ body {
 /* Account Panel */
 .account-panel {
   grid-column: 1;
-  grid-row: 1;
+  grid-row: 1 / 4;
+  align-self: stretch;
 }
 
 .account-stats {
@@ -791,7 +792,7 @@ body {
 
 /* Positions Panel */
 .positions-panel {
-  grid-column: 1 / 4;
+  grid-column: 2 / 4;
   grid-row: 3;
   min-height: 180px;
 }
@@ -800,6 +801,11 @@ body {
 .orders-panel .panel-content {
   max-height: 180px;
   overflow-y: auto;
+}
+
+.orders-panel {
+  grid-column: 2 / 4;
+  grid-row: 4;
 }
 
 /* Data Tables */
@@ -1301,7 +1307,7 @@ body {
     grid-column: 1 / 3;
     grid-row: 2;
   }
-  
+
   .positions-panel,
   .orders-panel {
     grid-column: 1 / 3;
@@ -1311,12 +1317,13 @@ body {
 /* Order Form Panel */
 .order-ticket-panel {
   grid-column: 1;
-  grid-row: 4;
-  min-height: 160px;
+  grid-row: 4 / 6;
+  min-height: 220px;
+  margin-top: 4px;
 }
 
 .order-ticket-panel .panel-content {
-  max-height: 200px;
+  max-height: none;
   overflow-y: auto;
 }
 
@@ -1340,11 +1347,8 @@ body {
     display: none;
   }
 }
-/* Activities Panel */
 .activities-panel {
-  grid-column: 1 / 4;
-  grid-row: 4;
-  min-height: 140px;
+  display: none;
 }
 
 .activities-panel .panel-content {
@@ -1414,7 +1418,7 @@ body {
 /* Alert Panel */
 .alerts-panel {
   grid-column: 2 / 4;
-  grid-row: 4;
+  grid-row: 5;
   min-height: 160px;
 }
 
