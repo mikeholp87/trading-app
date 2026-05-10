@@ -88,6 +88,7 @@ let state = {
   rawBars: [],
   alerts: JSON.parse(localStorage.getItem('price-alerts') || '[]'),
   alertsTriggered: new Set(),
+  alertedTabs: {}, // { tabName: bool } — tracks whether snapshots have been loaded per tab
   dailyPnL: 0,
   realizedPnL: 0
 };
@@ -2364,7 +2365,12 @@ const switchWatchlist = (name) => {
   
   renderWatchlistTabs();
   renderWatchlist();
-  loadSnapshots();
+
+  // Lazy-load: only fetch snapshots if this tab hasn't been loaded yet
+  if (!state.alertedTabs[name]) {
+    state.alertedTabs[name] = true;
+    loadSnapshots();
+  }
 };
 
 // Create new watchlist
