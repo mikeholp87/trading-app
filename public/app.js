@@ -759,9 +759,14 @@ const initChart = () => {
     resizeObserver.observe(container);
 
     // Subscribe to visible range changes for auto-loading more data
-    state.chart.timeScale().subscribeVisibleRangeChange((newRange) => {
+    state.chart.timeScale().subscribeVisibleLogicalRangeChange((newRange) => {
       if (!newRange || !state.currentSymbol || state.loadingMore) return;
-      loadMoreOnScroll(newRange);
+      const bars = state.rawBars;
+      if (!bars || bars.length === 0) return;
+      const startTime = bars[0].time;
+      const endTime = bars[bars.length - 1].time;
+      const logicalRange = { from: newRange.from, to: newRange.to, startTime, endTime };
+      loadMoreOnScroll(logicalRange);
     });
 
     console.log('[Chart] Chart initialized, series ready');
@@ -953,30 +958,31 @@ const updateChart = (bars, timeframe) => {
   console.log('[Chart] Rendered, chart size:', container.clientWidth, 'x', container.clientHeight);
 };
 
-// Auto-load more data when user scrolls to data edges
+// Auto-load more data when user scrolls to data edges (logical indices from lightweight-charts)
+const showChartLoading = () => {
+  const el = document.getElementById('chart-loading');
+  if (el) el.classList.add('visible');
+};
+const hideChartLoading = () => {
+  const el = document.getElementById('chart-loading');
+  if (el) el.classList.remove('visible');
+};
+
 const loadMoreOnScroll = async (range) => {
   if (!state.chart || !state.currentSymbol || state.loadingMore) return;
-  if (!state.chartDataStart || !state.chartDataEnd) return;
+  if (!state.rawBars || state.rawBars.length === 0) return;
 
-  const start = state.chartDataStart;
-  const end = state.chartDataEnd;
-  const duration = end - start;
-  if (duration <= 0) return;
-
-  // Calculate time span of one bar based on current visible range
-  const visibleRange = range.to - range.from;
-  const estimatedBarCount = Math.max(50, Math.round(visibleRange / (duration / state.rawBars.length)));
-  const barTimeSpan = duration / estimatedBarCount;
+  const totalBars = state.rawBars.length;
+  const MARGIN = 10; // bars from edge to trigger load
 
   // --- Scroll LEFT: load older data ---
-  if (range.from <= start + barTimeSpan && !state.loadedEarliest) {
+  if (range.from <= MARGIN && !state.loadedEarliest) {
     state.loadingMore = true;
+    showChartLoading();
     const currentTF = state.timeframe;
     const param = getTimeframeParam(currentTF);
-    const startDate = getHistoricalStart(currentTF, start);
-    const endDateStr = new Date(start * 1000).toISOString();
-
-    console.log('[Chart] Loading older data from', startDate, 'to', endDateStr);
+    const startDate = getHistoricalStart(currentTF, state.chartDataStart);
+    const endDateStr = new Date(state.chartDataStart * 1000).toISOString();
 
     try {
       const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDateStr}`);
@@ -992,46 +998,30 @@ const loadMoreOnScroll = async (range) => {
 
         state.rawBars = [...newBars, ...state.rawBars];
         state.candlestickSeries.setData(formatPriceData(state.rawBars));
-
         const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
         state.volumeSeries.setData(volumeData);
-
-        const combinedCloses = state.rawBars.map(b => b.close);
-        const ema20 = calculateEMA(combinedCloses, 20);
-        const emaData = state.rawBars.map((b, i) => ({
-          time: b.time,
-          value: ema20[i] || null
-        })).filter(d => d.value !== null);
-        state.emaSeries.setData(emaData);
-
-        // Update indicator data
         updateIndicatorData();
-
         state.chartDataStart = newBars[0].time;
-
-        console.log('[Chart] Loaded', newBars.length, 'older bars. Total:', state.rawBars.length);
         if (newBars.length < 50) state.loadedEarliest = true;
       } else {
         state.loadedEarliest = true;
-        console.log('[Chart] No older data available');
       }
     } catch (e) {
       console.error('[Chart] Failed to load older data:', e);
     }
-
     state.loadingMore = false;
+    hideChartLoading();
     return;
   }
 
   // --- Scroll RIGHT: load newer data ---
-  if (range.to >= end - barTimeSpan) {
+  if (range.to >= totalBars - MARGIN) {
     state.loadingMore = true;
+    showChartLoading();
     const currentTF = state.timeframe;
     const param = getTimeframeParam(currentTF);
-    const startDate = new Date(end * 1000).toISOString();
-    const endDate = new Date(end * 1000 + getForwardMs(currentTF)).toISOString();
-
-    console.log('[Chart] Loading newer data from', startDate, 'to', endDate);
+    const startDate = new Date(state.chartDataEnd * 1000).toISOString();
+    const endDate = new Date(state.chartDataEnd * 1000 + getForwardMs(currentTF)).toISOString();
 
     try {
       const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDate}`);
@@ -1043,39 +1033,22 @@ const loadMoreOnScroll = async (range) => {
           low: parseFloat(b.l),
           close: parseFloat(b.c),
           volume: parseInt(b.v)
-        })).filter(b => b.time > end);
+        })).filter(b => b.time > state.chartDataEnd);
 
-        if (newBars.length === 0) {
-          console.log('[Chart] No newer bars available');
-          state.loadingMore = false;
-          return;
+        if (newBars.length > 0) {
+          state.rawBars = [...state.rawBars, ...newBars];
+          state.candlestickSeries.setData(formatPriceData(state.rawBars));
+          const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
+          state.volumeSeries.setData(volumeData);
+          updateIndicatorData();
+          state.chartDataEnd = newBars[newBars.length - 1].time;
         }
-
-        state.rawBars = [...state.rawBars, ...newBars];
-        state.candlestickSeries.setData(formatPriceData(state.rawBars));
-
-        const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
-        state.volumeSeries.setData(volumeData);
-
-        const combinedCloses = state.rawBars.map(b => b.close);
-        const ema20 = calculateEMA(combinedCloses, 20);
-        const emaData = state.rawBars.map((b, i) => ({
-          time: b.time,
-          value: ema20[i] || null
-        })).filter(d => d.value !== null);
-        state.emaSeries.setData(emaData);
-
-        // Update indicator data
-        updateIndicatorData();
-
-        state.chartDataEnd = newBars[newBars.length - 1].time;
-        console.log('[Chart] Loaded', newBars.length, 'newer bars. Total:', state.rawBars.length);
       }
     } catch (e) {
       console.error('[Chart] Failed to load newer data:', e);
     }
-
     state.loadingMore = false;
+    hideChartLoading();
   }
 };
 

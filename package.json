@@ -5,17 +5,37 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "electron": "electron electron/main.js",
+    "electron:dev": "electron electron/main.js --dev",
+    "build": "electron-builder",
+    "build:linux": "electron-builder --linux",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
   },
-  "dependencies": {
-    "axios": "^1.7.0",
-    "dotenv": "^16.4.0",
-    "express": "^4.19.0",
-    "ws": "^8.17.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.0",
-    "vitest": "^4.1.5"
+  "build": {
+    "appId": "com.alpaca.trading-dashboard",
+    "productName": "Alpaca Trading Dashboard",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "server.js",
+      "src/**",
+      "public/**",
+      ".env",
+      "package.json"
+    ],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Finance"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "mac": {
+      "target": ["dmg"]
+    }
   },
   "repository": {
     "type": "git",
@@ -28,5 +48,17 @@
   "bugs": {
     "url": "https://github.com/mikeholp87/trading-app/issues"
   },
-  "homepage": "https://github.com/mikeholp87/trading-app#readme"
+  "homepage": "https://github.com/mikeholp87/trading-app#readme",
+  "dependencies": {
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "nodemon": "^3.1.0",
+    "vitest": "^4.1.5"
+  }
 }
