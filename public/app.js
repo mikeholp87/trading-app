@@ -659,6 +659,29 @@ const loadChart = async (symbol, timeframe) => {
   }
 };
 
+const mergeAndSortBars = (bars) => {
+  const seen = new Map();
+  bars.forEach(bar => {
+    seen.set(bar.time, bar);
+  });
+
+  return Array.from(seen.values()).sort((a, b) => a.time - b.time);
+};
+
+const prependHistoricalBars = (existingBars, incomingBars) => {
+  if (!existingBars.length) return mergeAndSortBars(incomingBars);
+  const oldestTime = existingBars[0].time;
+  const filtered = incomingBars.filter(bar => bar.time < oldestTime);
+  return mergeAndSortBars([...filtered, ...existingBars]);
+};
+
+const appendHistoricalBars = (existingBars, incomingBars) => {
+  if (!existingBars.length) return mergeAndSortBars(incomingBars);
+  const newestTime = existingBars[existingBars.length - 1].time;
+  const filtered = incomingBars.filter(bar => bar.time > newestTime);
+  return mergeAndSortBars([...existingBars, ...filtered]);
+};
+
 const initChart = () => {
   const container = document.getElementById('chart-container');
   
@@ -983,6 +1006,7 @@ const loadMoreOnScroll = async (range) => {
     const param = getTimeframeParam(currentTF);
     const startDate = getHistoricalStart(currentTF, state.chartDataStart);
     const endDateStr = new Date(state.chartDataStart * 1000).toISOString();
+    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
 
     try {
       const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDateStr}`);
@@ -996,13 +1020,21 @@ const loadMoreOnScroll = async (range) => {
           volume: parseInt(b.v)
         }));
 
-        state.rawBars = [...newBars, ...state.rawBars];
+        const mergedBars = prependHistoricalBars(state.rawBars, newBars);
+        const addedBars = mergedBars.length - state.rawBars.length;
+        state.rawBars = mergedBars;
         state.candlestickSeries.setData(formatPriceData(state.rawBars));
         const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
         state.volumeSeries.setData(volumeData);
         updateIndicatorData();
-        state.chartDataStart = newBars[0].time;
-        if (newBars.length < 50) state.loadedEarliest = true;
+        state.chartDataStart = state.rawBars[0].time;
+        if (visibleRange && addedBars > 0) {
+          state.chart.timeScale().setVisibleLogicalRange({
+            from: visibleRange.from + addedBars,
+            to: visibleRange.to + addedBars
+          });
+        }
+        if (addedBars === 0 || newBars.length < 50) state.loadedEarliest = true;
       } else {
         state.loadedEarliest = true;
       }
@@ -1022,6 +1054,7 @@ const loadMoreOnScroll = async (range) => {
     const param = getTimeframeParam(currentTF);
     const startDate = new Date(state.chartDataEnd * 1000).toISOString();
     const endDate = new Date(state.chartDataEnd * 1000 + getForwardMs(currentTF)).toISOString();
+    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
 
     try {
       const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDate}`);
@@ -1036,12 +1069,15 @@ const loadMoreOnScroll = async (range) => {
         })).filter(b => b.time > state.chartDataEnd);
 
         if (newBars.length > 0) {
-          state.rawBars = [...state.rawBars, ...newBars];
+          state.rawBars = appendHistoricalBars(state.rawBars, newBars);
           state.candlestickSeries.setData(formatPriceData(state.rawBars));
           const volumeData = state.rawBars.map(b => ({ time: b.time, value: b.volume || 0 }));
           state.volumeSeries.setData(volumeData);
           updateIndicatorData();
-          state.chartDataEnd = newBars[newBars.length - 1].time;
+          state.chartDataEnd = state.rawBars[state.rawBars.length - 1].time;
+          if (visibleRange) {
+            state.chart.timeScale().setVisibleLogicalRange(visibleRange);
+          }
         }
       }
     } catch (e) {
@@ -2993,7 +3029,7 @@ const setTimeframe = (tf) => {
     btn.classList.toggle('active', btn.dataset.tf === tf);
   });
   state.timeframe = tf;
-  loadChartData(state.currentSymbol, tf, state.chartType);
+  loadChart(state.currentSymbol, tf);
 };
 
 // Initialize theme on load
