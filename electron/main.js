@@ -1,7 +1,8 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage } = require('electron');
 const path = require('path');
 
 let mainWindow;
+let tray;
 let serverProcess;
 
 function createWindow() {
@@ -18,43 +19,117 @@ function createWindow() {
     }
   });
 
-  // Load the local dev server
   mainWindow.loadURL('http://localhost:3000');
 
-  // Open DevTools in development
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    createTray();
   });
 }
 
-// Start the Express server before opening the window
+function createTray() {
+  if (tray) return;
+  
+  // Create a simple 16x16 icon in memory
+  const size = 16;
+  const canvas = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    canvas[i * 4] = 26;     // R
+    canvas[i * 4 + 1] = 42; // G
+    canvas[i * 4 + 2] = 74;  // B
+    canvas[i * 4 + 3] = 255; // A
+  }
+  
+  const trayIcon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
+  tray = new Tray(trayIcon);
+  tray.setToolTip('Alpaca Trading Dashboard');
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Open Dashboard', click: () => { openWindow(); } },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { cleanup(); app.quit(); } }
+  ]);
+  
+  tray.setContextMenu(contextMenu);
+  tray.on('click', () => { openWindow(); });
+}
+
+function openWindow() {
+  if (mainWindow) {
+    mainWindow.focus();
+    return;
+  }
+  
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
+  
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: '#0a0e1a',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  mainWindow.loadURL('http://localhost:3000');
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    createTray();
+  });
+}
+
 function startServer() {
   const { spawn } = require('child_process');
-  serverProcess = spawn('node', ['server.js'], {
-    cwd: path.join(__dirname, '..'),
-    stdio: 'pipe',
-    detached: true
+  
+  // Check if server is already running on port 3000
+  const net = require('net');
+  const checkPort = (port) => new Promise((resolve) => {
+    const s = net.createServer();
+    s.once('error', () => resolve(true));
+    s.once('listening', () => { s.close(); resolve(false); });
+    s.listen(port);
   });
 
-  serverProcess.stdout.on('data', (data) => {
-    console.log(`[Server] ${data.toString().trim()}`);
-  });
+  (async () => {
+    const inUse = await checkPort(3000);
+    if (inUse) {
+      console.log('[Server] Port 3000 already in use, skipping server start');
+      createWindow();
+      return;
+    }
 
-  serverProcess.stderr.on('data', (data) => {
-    console.error(`[Server Error] ${data.toString().trim()}`);
-  });
+    serverProcess = spawn('node', ['server.js'], {
+      cwd: path.join(__dirname, '..'),
+      stdio: 'inherit'
+    });
 
-  // Wait for server to be ready before opening window
-  setTimeout(() => {
-    createWindow();
-  }, 1500);
+    serverProcess.on('error', (err) => {
+      console.error('[Server] Failed to start:', err.message);
+    });
+
+    setTimeout(() => {
+      createWindow();
+    }, 1500);
+  })();
 }
 
-// Build the application menu
+function cleanup() {
+  if (tray) { tray.destroy(); tray = null; }
+  if (serverProcess) { serverProcess.kill(); }
+}
+
 function createMenu() {
   const template = [
     {
@@ -63,19 +138,19 @@ function createMenu() {
         {
           label: 'Reload',
           accelerator: 'CmdOrCtrl+R',
-          click: () => mainWindow.reload()
+          click: () => { if (mainWindow) mainWindow.reload(); }
         },
         { type: 'separator' },
         {
           label: 'Toggle DevTools',
           accelerator: 'CmdOrCtrl+Shift+I',
-          click: () => mainWindow.webContents.toggleDevTools()
+          click: () => { if (mainWindow) mainWindow.webContents.toggleDevTools(); }
         },
         { type: 'separator' },
         {
           label: 'Exit',
           accelerator: 'CmdOrCtrl+Q',
-          click: () => app.quit()
+          click: () => { cleanup(); app.quit(); }
         }
       ]
     },
@@ -96,7 +171,11 @@ function createMenu() {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
-        { role: 'close' }
+        {
+          label: 'Close Window',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => { if (mainWindow) mainWindow.close(); }
+        }
       ]
     }
   ];
@@ -111,21 +190,14 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (serverProcess) {
-    serverProcess.kill();
-  }
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  // Don't quit — keep running in system tray
+  createTray();
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+  if (!mainWindow) openWindow();
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });

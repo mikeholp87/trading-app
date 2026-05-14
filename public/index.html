@@ -27,6 +27,9 @@
       <button id="theme-toggle" class="theme-toggle" title="Toggle theme (T)">
         <span class="theme-icon">&#9790;</span>
       </button>
+      <button id="sample-dashboard-btn" class="sample-dashboard-btn" title="Watch Sample Dashboard">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+      </button>
     </header>
 
     <main class="dashboard-grid">
@@ -455,6 +458,27 @@
                 <span>Refresh orders</span>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Video Modal -->
+      <div id="video-modal" class="modal video-modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Sample Dashboard</h3>
+            <button class="modal-close" id="close-video-modal">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="video-container">
+              <iframe
+                id="video-frame"
+                src=""
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowfullscreen>
+              </iframe>
+            </div>
+            <p class="video-note">Watch how to use the Alpaca Trading Dashboard</p>
           </div>
         </div>
       </div>

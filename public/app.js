@@ -83,6 +83,7 @@ let state = {
   macdPane: null,
   ws: null,
   loadingMore: false,
+  chartRequestId: 0,
   chartDataStart: null,
   chartDataEnd: null,
   rawBars: [],
@@ -615,18 +616,26 @@ const renderEquityChart = (data) => {
 
 const loadChart = async (symbol, timeframe) => {
   console.log('[Chart] Loading chart for', symbol, 'timeframe:', timeframe);
+  const requestId = ++state.chartRequestId;
   const param = getTimeframeParam(timeframe);
   const start = getStartDate(timeframe);
 
   // Reset bounds when changing symbol
+  state.loadingMore = false;
   state.chartDataStart = null;
   state.chartDataEnd = null;
   state.loadedEarliest = false;
   state.rawBars = [];
+  hideChartLoading();
   
   try {
     console.log('[Chart] Fetching from /api/market/historical/', symbol, '?timeframe=', param);
     const result = await api.get(`/api/market/historical/${symbol}?timeframe=${param}&start=${start}`);
+
+    if (requestId !== state.chartRequestId) {
+      console.log('[Chart] Ignoring stale chart response for', symbol, timeframe);
+      return;
+    }
     
     if (result.success && result.data.bars && result.data.bars.length > 0) {
       console.log('[Chart] Got', result.data.bars.length, 'bars');
@@ -655,6 +664,10 @@ const loadChart = async (symbol, timeframe) => {
       console.log('[Chart] No bars returned for', symbol);
     }
   } catch (e) {
+    if (requestId !== state.chartRequestId) {
+      console.log('[Chart] Ignoring stale chart error for', symbol, timeframe);
+      return;
+    }
     console.error('[Chart] Failed to load chart:', e);
   }
 };
@@ -995,11 +1008,12 @@ const loadMoreOnScroll = async (range) => {
   if (!state.chart || !state.currentSymbol || state.loadingMore) return;
   if (!state.rawBars || state.rawBars.length === 0) return;
 
+  const requestId = state.chartRequestId;
   const totalBars = state.rawBars.length;
   const MARGIN = 10; // bars from edge to trigger load
 
   // --- Scroll LEFT: load older data ---
-  if (range.from <= MARGIN && !state.loadedEarliest) {
+  if (range.from <= MARGIN && !state.loadedEarliest && state.chartDataStart !== null) {
     state.loadingMore = true;
     showChartLoading();
     const currentTF = state.timeframe;
@@ -1010,7 +1024,7 @@ const loadMoreOnScroll = async (range) => {
 
     try {
       const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDateStr}`);
-      if (result.success && result.data.bars && result.data.bars.length > 0) {
+      if (requestId === state.chartRequestId && result.success && result.data.bars && result.data.bars.length > 0) {
         const newBars = result.data.bars.map(b => ({
           time: new Date(b.t).getTime() / 1000,
           open: parseFloat(b.o),
@@ -1035,19 +1049,24 @@ const loadMoreOnScroll = async (range) => {
           });
         }
         if (addedBars === 0 || newBars.length < 50) state.loadedEarliest = true;
-      } else {
+      } else if (requestId === state.chartRequestId) {
         state.loadedEarliest = true;
       }
     } catch (e) {
-      console.error('[Chart] Failed to load older data:', e);
+      if (requestId === state.chartRequestId) {
+        console.error('[Chart] Failed to load older data:', e);
+      }
+    } finally {
+      if (requestId === state.chartRequestId) {
+        state.loadingMore = false;
+        hideChartLoading();
+      }
     }
-    state.loadingMore = false;
-    hideChartLoading();
     return;
   }
 
   // --- Scroll RIGHT: load newer data ---
-  if (range.to >= totalBars - MARGIN) {
+  if (range.to >= totalBars - MARGIN && state.chartDataEnd !== null) {
     state.loadingMore = true;
     showChartLoading();
     const currentTF = state.timeframe;
@@ -1058,7 +1077,7 @@ const loadMoreOnScroll = async (range) => {
 
     try {
       const result = await api.get(`/api/market/historical/${state.currentSymbol}?timeframe=${param}&start=${startDate}&end=${endDate}`);
-      if (result.success && result.data.bars && result.data.bars.length > 0) {
+      if (requestId === state.chartRequestId && result.success && result.data.bars && result.data.bars.length > 0) {
         const newBars = result.data.bars.map(b => ({
           time: new Date(b.t).getTime() / 1000,
           open: parseFloat(b.o),
@@ -1081,10 +1100,15 @@ const loadMoreOnScroll = async (range) => {
         }
       }
     } catch (e) {
-      console.error('[Chart] Failed to load newer data:', e);
+      if (requestId === state.chartRequestId) {
+        console.error('[Chart] Failed to load newer data:', e);
+      }
+    } finally {
+      if (requestId === state.chartRequestId) {
+        state.loadingMore = false;
+        hideChartLoading();
+      }
     }
-    state.loadingMore = false;
-    hideChartLoading();
   }
 };
 
@@ -2804,6 +2828,24 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
 
   // Theme toggle button
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+  // Sample Dashboard video button
+  const videoModal = document.getElementById('video-modal');
+  const videoFrame = document.getElementById('video-frame');
+  document.getElementById('sample-dashboard-btn').addEventListener('click', () => {
+    videoFrame.src = 'https://www.youtube.com/embed/gebtJAsMioo?autoplay=1';
+    videoModal.classList.remove('hidden');
+  });
+  document.getElementById('close-video-modal').addEventListener('click', () => {
+    videoFrame.src = '';
+    videoModal.classList.add('hidden');
+  });
+  videoModal.addEventListener('click', (e) => {
+    if (e.target.id === 'video-modal') {
+      videoFrame.src = '';
+      videoModal.classList.add('hidden');
+    }
+  });
 
   // Keyboard shortcuts modal
   document.getElementById('close-shortcuts-modal').addEventListener('click', closeShortcutsModal);
