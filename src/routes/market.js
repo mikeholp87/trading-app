@@ -63,6 +63,33 @@ router.get('/snapshot/:symbol', async (req, res) => {
   }
 });
 
+router.get('/news', async (req, res) => {
+  try {
+    const { symbol, symbols, start, end, limit = 10, include_content = 'false', sort = 'desc' } = req.query;
+    const symbolsParam = symbols || symbol;
+
+    if (!symbolsParam) {
+      return res.status(400).json({ success: false, error: 'symbol or symbols parameter required' });
+    }
+
+    const news = await alpaca.getNews({
+      symbols: symbolsParam,
+      start,
+      end,
+      limit: parseInt(limit, 10),
+      include_content: include_content === 'true',
+      sort
+    });
+
+    const items = Array.isArray(news) ? news : (news.news || news.data || []);
+    res.json({ success: true, data: items });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    console.error('[Market] News error:', message);
+    res.status(error.response?.status || 500).json({ success: false, error: message });
+  }
+});
+
 // Get snapshots for multiple symbols
 router.get('/snapshots', async (req, res) => {
   try {
@@ -76,6 +103,19 @@ router.get('/snapshots', async (req, res) => {
   } catch (error) {
     const message = error.response?.data?.message || error.message;
     console.error('[Market] Snapshots error:', message);
+    res.status(error.response?.status || 500).json({ success: false, error: message });
+  }
+});
+
+router.get('/movers', async (req, res) => {
+  try {
+    const { market_type = 'stocks', top = 10 } = req.query;
+    console.log('[Market] Getting movers for', market_type);
+    const movers = await alpaca.getMovers(market_type, parseInt(top, 10));
+    res.json({ success: true, data: movers });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    console.error('[Market] Movers error:', message);
     res.status(error.response?.status || 500).json({ success: false, error: message });
   }
 });

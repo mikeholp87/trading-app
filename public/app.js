@@ -11,7 +11,7 @@ const debounce = (fn, wait) => {
 
 // Input validators
 const validateSymbol = (str) => /^[A-Z]{1,5}$/.test(str);
-const validateQty = (n) => Number.isInteger(n) && n > 0;
+const validateQty = (n) => typeof n === 'number' && !isNaN(n) && n > 0;
 const validatePrice = (n) => typeof n === 'number' && !isNaN(n) && n > 0;
 
 // Toast notification system
@@ -84,9 +84,21 @@ let state = {
   ws: null,
   loadingMore: false,
   chartRequestId: 0,
+  symbolRequestId: 0,
   chartDataStart: null,
   chartDataEnd: null,
   rawBars: [],
+  selectedSnapshot: null,
+  selectedNews: [],
+  selectedPeers: [],
+  portfolioHistory: null,
+  marketMovers: {
+    gainers: [],
+    losers: []
+  },
+  scannerFilter: 'gainers',
+  scannerQuery: '',
+  journalEntries: JSON.parse(localStorage.getItem('trade-journal') || '[]'),
   alerts: JSON.parse(localStorage.getItem('price-alerts') || '[]'),
   alertsTriggered: new Set(),
   alertedTabs: {}, // { tabName: bool } — tracks whether snapshots have been loaded per tab
@@ -120,6 +132,252 @@ const formatDate = (dateStr) => {
   return date.toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
   });
+};
+
+const formatRelativeTime = (dateStr) => {
+  if (!dateStr) return '--';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '--';
+
+  const diffMs = Date.now() - date.getTime();
+  const diffMinutes = Math.round(diffMs / 60000);
+  if (diffMinutes < 1) return 'just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays}d ago`;
+};
+
+const normalizeResearchSymbol = (symbol) => (symbol || '').toUpperCase().trim();
+
+const getLiveQuoteForSymbol = (symbol) => state.watchlistQuotes[normalizeResearchSymbol(symbol)] || {};
+
+const getSelectedSymbolSummary = (symbol = state.currentSymbol) => {
+  const selected = normalizeResearchSymbol(symbol);
+  const snapshot = selected === normalizeResearchSymbol(state.currentSymbol)
+    ? (state.selectedSnapshot || {})
+    : {};
+  const quote = getLiveQuoteForSymbol(selected);
+  const latestQuote = snapshot.latestQuote || {};
+  const latestTrade = snapshot.latestTrade || {};
+  const dailyBar = snapshot.dailyBar || {};
+  const prevDailyBar = snapshot.prevDailyBar || {};
+  const mover = selected === normalizeResearchSymbol(state.currentSymbol) ? null : getMoverEntryForSymbol(selected);
+  const last = quote.last
+    || mover?.last
+    || latestTrade.p
+    || latestQuote.ap
+    || latestQuote.bp
+    || dailyBar.c
+    || '--';
+
+  const prevClose = prevDailyBar.c || dailyBar.o || dailyBar.c || latestTrade.p || 0;
+  const changePercent = prevClose
+    ? (((parseFloat(last) || 0) - parseFloat(prevClose)) / parseFloat(prevClose)) * 100
+    : 0;
+  const moverChange = mover?.changePercent;
+
+  return {
+    symbol: selected,
+    last,
+    bid: quote.bid || latestQuote.bp || '--',
+    ask: quote.ask || latestQuote.ap || '--',
+    changePercent: Number.isFinite(changePercent) && prevClose ? changePercent : (Number.isFinite(moverChange) ? moverChange : 0),
+    volume: quote.volume || dailyBar.v || 0,
+    high: dailyBar.h || '--',
+    low: dailyBar.l || '--',
+    open: dailyBar.o || '--',
+    close: dailyBar.c || '--',
+    updatedAt: latestTrade.t || latestQuote.t || dailyBar.t || null
+  };
+};
+
+const normalizeMoverEntry = (entry) => {
+  if (!entry) return null;
+  const symbol = normalizeResearchSymbol(entry.symbol || entry.S || entry.ticker || entry.sym);
+  const changePercent = parseFloat(
+    entry.change_percent ?? entry.change_pct ?? entry.percent_change ?? entry.chg_pct ?? entry.change ?? entry.pct_change ?? 0
+  );
+  const last = parseFloat(entry.last ?? entry.price ?? entry.close ?? entry.c ?? entry.p ?? entry.mark ?? 0);
+  const volume = parseFloat(entry.volume ?? entry.v ?? entry.day_volume ?? entry.avg_volume ?? 0);
+
+  return {
+    symbol,
+    changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+    last: Number.isFinite(last) ? last : 0,
+    volume: Number.isFinite(volume) ? volume : 0,
+    raw: entry
+  };
+};
+
+const getMoverEntryForSymbol = (symbol) => {
+  const normalized = normalizeResearchSymbol(symbol);
+  const allMovers = [...(state.marketMovers.gainers || []), ...(state.marketMovers.losers || [])];
+  return allMovers.find((entry) => entry.symbol === normalized) || null;
+};
+
+const normalizeJournalEntry = (entry) => {
+  if (!entry) return null;
+  const symbol = normalizeResearchSymbol(entry.symbol);
+  if (!symbol) return null;
+
+  return {
+    id: entry.id || Date.now(),
+    symbol,
+    stance: entry.stance || 'Neutral',
+    stage: entry.stage || 'Review',
+    title: (entry.title || '').trim(),
+    note: (entry.note || '').trim(),
+    createdAt: entry.createdAt || new Date().toISOString()
+  };
+};
+
+const saveJournalEntries = () => {
+  localStorage.setItem('trade-journal', JSON.stringify(state.journalEntries));
+};
+
+const estimateOrderNotional = (order) => {
+  const qty = Math.abs(parseFloat(order.qty || order.filled_qty || 0)) || 0;
+  if (!qty) return 0;
+
+  const limitPrice = parseFloat(order.limit_price || order.stop_price || 0);
+  if (limitPrice > 0) return limitPrice * qty;
+
+  const quote = getLiveQuoteForSymbol(order.symbol);
+  const snapshot = order.symbol === state.currentSymbol ? (state.selectedSnapshot || {}) : {};
+  const latestQuote = snapshot.latestQuote || {};
+  const price = quote.last || quote.ask || latestQuote.ap || latestQuote.bp || snapshot.dailyBar?.c || 0;
+  return price > 0 ? price * qty : 0;
+};
+
+const getActiveOrders = () => (state.orders || []).filter((order) => !['filled', 'cancelled', 'rejected', 'expired'].includes(order.status));
+
+const computeRiskSnapshot = () => {
+  const account = state.account || {};
+  const equity = parseFloat(account.equity || account.portfolio_value || 0) || 0;
+  const cash = parseFloat(account.cash || 0) || 0;
+  const positions = state.positions || [];
+  const activeOrders = getActiveOrders();
+  const grossExposure = positions.reduce((sum, pos) => sum + Math.abs(parseFloat(pos.market_value || 0) || 0), 0);
+  const netExposure = positions.reduce((sum, pos) => sum + (parseFloat(pos.market_value || 0) || 0), 0);
+  const largestPosition = positions.reduce((largest, pos) => {
+    const value = Math.abs(parseFloat(pos.market_value || 0) || 0);
+    return value > largest ? value : largest;
+  }, 0);
+  const unrealizedPnL = positions.reduce((sum, pos) => sum + (parseFloat(pos.unrealized_pl || 0) || 0), 0);
+  const openOrderRisk = activeOrders.reduce((sum, order) => sum + estimateOrderNotional(order), 0);
+  const positionCount = positions.length;
+  const alertsCount = state.alerts.length;
+  const journalCount = state.journalEntries.length;
+  const exposureRatio = equity > 0 ? grossExposure / equity : 0;
+  const concentrationPct = equity > 0 ? (largestPosition / equity) * 100 : 0;
+  const openOrderPct = equity > 0 ? (openOrderRisk / equity) * 100 : 0;
+  const cashPct = equity > 0 ? (cash / equity) * 100 : 0;
+  const score = Math.min(100, Math.round(
+    (exposureRatio * 32) +
+    (concentrationPct * 0.55) +
+    (openOrderPct * 0.4) +
+    Math.max(0, 18 - cashPct * 0.18)
+  ));
+  const posture = score < 30 ? 'Low' : score < 55 ? 'Balanced' : score < 75 ? 'Elevated' : 'High';
+  const history = state.portfolioHistory || {};
+  const equitySeries = Array.isArray(history.equity) ? history.equity.map((v) => parseFloat(v) || 0) : [];
+  const profitLossSeries = Array.isArray(history.profit_loss) ? history.profit_loss.map((v) => parseFloat(v) || 0) : [];
+  const dayPnL = profitLossSeries.length ? profitLossSeries[profitLossSeries.length - 1] : 0;
+  const dayChange = equitySeries.length > 1 ? equitySeries[equitySeries.length - 1] - equitySeries[equitySeries.length - 2] : dayPnL;
+  const dayChangePct = equitySeries.length > 1 && equitySeries[equitySeries.length - 2] !== 0
+    ? ((equitySeries[equitySeries.length - 1] - equitySeries[equitySeries.length - 2]) / equitySeries[equitySeries.length - 2]) * 100
+    : 0;
+  const lastEquity = equitySeries.length ? equitySeries[equitySeries.length - 1] : equity;
+
+  return {
+    equity,
+    cash,
+    grossExposure,
+    netExposure,
+    largestPosition,
+    openOrderRisk,
+    positionCount,
+    alertsCount,
+    journalCount,
+    exposureRatio,
+    concentrationPct,
+    openOrderPct,
+    cashPct,
+    unrealizedPnL,
+    score,
+    posture,
+    dayPnL,
+    dayChange,
+    dayChangePct,
+    lastEquity,
+    activeOrders: activeOrders.length
+  };
+};
+
+const getScannerSymbols = () => {
+  const query = state.scannerQuery.trim().toUpperCase();
+  const positionsBySymbol = new Set(state.positions.map((pos) => pos.symbol));
+
+  let symbols = [];
+  switch (state.scannerFilter) {
+    case 'losers':
+      symbols = (state.marketMovers.losers || []).length
+        ? (state.marketMovers.losers || []).map((entry) => entry.symbol)
+        : state.watchlist.slice();
+      break;
+    case 'watchlist':
+      symbols = state.watchlist.slice();
+      break;
+    case 'positions':
+      symbols = state.positions.map((pos) => pos.symbol);
+      break;
+    case 'volume':
+      symbols = state.watchlist
+        .slice()
+        .sort((a, b) => (getLiveQuoteForSymbol(b).volume || 0) - (getLiveQuoteForSymbol(a).volume || 0));
+      break;
+    case 'gainers':
+    default:
+      symbols = (state.marketMovers.gainers || []).length
+        ? (state.marketMovers.gainers || []).map((entry) => entry.symbol)
+        : state.watchlist.slice();
+      break;
+  }
+
+  const unique = [];
+  const seen = new Set();
+  symbols.forEach((symbol) => {
+    const normalized = normalizeResearchSymbol(symbol);
+    if (!normalized || seen.has(normalized)) return;
+    if (query && !normalized.includes(query)) return;
+    seen.add(normalized);
+    unique.push(normalized);
+  });
+
+  return unique.map((symbol) => ({
+    symbol,
+    quote: getLiveQuoteForSymbol(symbol),
+    hasPosition: positionsBySymbol.has(symbol),
+    hasNote: Boolean(state.symbolNotes[symbol] && state.symbolNotes[symbol].trim())
+  }));
+};
+
+const buildComparePeers = (symbol) => {
+  const selected = normalizeResearchSymbol(symbol);
+  const peers = [];
+  const pushUnique = (entry) => {
+    const candidate = normalizeResearchSymbol(entry);
+    if (!candidate || candidate === selected || peers.includes(candidate)) return;
+    peers.push(candidate);
+  };
+
+  state.watchlist.forEach(pushUnique);
+  (state.marketMovers.gainers || []).slice(0, 3).forEach((item) => pushUnique(item.symbol));
+  (state.marketMovers.losers || []).slice(0, 3).forEach((item) => pushUnique(item.symbol));
+
+  return peers.slice(0, 3);
 };
 
 const getTimeframeParam = (tf) => {
@@ -208,6 +466,11 @@ const handleWsMessage = (data) => {
       change: parseFloat(change)
     };
     renderWatchlist();
+    if (symbol === state.currentSymbol) {
+      renderResearchSidebar();
+      renderExecutionSummary();
+    }
+    renderRiskJournal();
     checkAlerts(symbol, parseFloat(last));
     updatePositionPrices(symbol, parseFloat(last));
   } else if (data.type === 'trade') {
@@ -218,6 +481,11 @@ const handleWsMessage = (data) => {
       volume: parseInt(volume)
     };
     renderWatchlist();
+    if (symbol === state.currentSymbol) {
+      renderResearchSidebar();
+      renderExecutionSummary();
+    }
+    renderRiskJournal();
     checkAlerts(symbol, parseFloat(last));
     updatePositionPrices(symbol, parseFloat(last));
   }
@@ -312,6 +580,8 @@ const renderAlerts = () => {
     `;
     container.appendChild(div);
   });
+
+  renderRiskJournal();
 };
 
 const api = {
@@ -359,6 +629,7 @@ const loadAccount = async () => {
     if (result.success) {
       state.account = result.data;
       renderAccount();
+      renderExecutionSummary();
     }
   } catch (e) {
     console.error('Failed to load account:', e);
@@ -372,6 +643,7 @@ const loadPositions = async () => {
       state.positions = result.data || [];
       console.log('[API] Loaded', state.positions.length, 'positions');
       renderPositions();
+      renderExecutionSummary();
     }
   } catch (e) {
     console.error('[API] Failed to load positions:', e);
@@ -385,6 +657,7 @@ const loadOrders = async () => {
       state.orders = result.data || [];
       console.log('[API] Loaded', state.orders.length, 'orders');
       renderOrders();
+      renderExecutionSummary();
     }
   } catch (e) {
     console.error('[API] Failed to load orders:', e);
@@ -475,12 +748,15 @@ const loadSnapshots = async () => {
             bid: parseFloat(q.bp || 0),
             ask: parseFloat(q.ap || 0),
             last: trade ? parseFloat(trade.p) : parseFloat(q.ap || q.bp || 0),
-            change: change
+            change: change,
+            volume: snapshot.dailyBar?.v || 0
           };
         }
       });
       
       renderWatchlist();
+      renderResearchSidebar();
+      renderRiskJournal();
     }
   } catch (e) {
     console.error('[API] Failed to load snapshots:', e);
@@ -512,16 +788,23 @@ const renderActivities = () => {
                    activity.amount ? formatMoney(activity.amount) : '--';
     
     const dateStr = activity.date ? formatDate(activity.date) : '--';
+    const symbolValue = activity.symbol || '--';
     
     let typeClass = '';
     if (type === 'fill') typeClass = 'trade';
     else if (type === 'dividend') typeClass = 'dividend';
     else if (type === 'fee') typeClass = 'fee';
+    row.dataset.symbol = symbolValue;
+    row.onclick = () => {
+      if (symbolValue !== '--') {
+        selectSymbol(symbolValue, { source: 'activity' });
+      }
+    };
     
     row.innerHTML = `
       <td>${dateStr}</td>
       <td class="${typeClass}">${type}</td>
-      <td>${symbol}</td>
+      <td>${symbolValue}</td>
       <td class="${side === 'buy' ? 'buy' : side === 'sell' ? 'sell' : ''}">${side}</td>
       <td>${qty}</td>
       <td>${price}</td>
@@ -530,6 +813,8 @@ const renderActivities = () => {
     
     tbody.appendChild(row);
   });
+
+  renderRiskJournal();
 };
 
 const renderAccountDetails = () => {
@@ -567,6 +852,8 @@ const loadClock = async () => {
     if (result.success) {
       state.clock = result.data;
       renderClock();
+      renderExecutionSummary();
+      renderResearchSidebar();
     }
   } catch (e) {
     console.error('Failed to load clock:', e);
@@ -577,11 +864,104 @@ const loadPortfolioHistory = async () => {
   try {
     const result = await api.get('/api/portfolio/history?period=1M');
     if (result.success && result.data && result.data.equity) {
+      state.portfolioHistory = result.data;
+      const plSeries = Array.isArray(result.data.profit_loss) ? result.data.profit_loss.map((v) => parseFloat(v) || 0) : [];
+      state.dailyPnL = plSeries.length ? plSeries[plSeries.length - 1] : 0;
       renderEquityChart(result.data);
+      renderRiskJournal();
     }
   } catch (e) {
     console.error('Failed to load portfolio history:', e);
   }
+};
+
+const loadMovers = async () => {
+  try {
+    const result = await api.get('/api/market/movers?market_type=stocks&top=10');
+    if (result.success && result.data) {
+      const payload = result.data;
+      const gainers = payload.gainers || payload.top_gainers || payload.winners || payload.data?.gainers || [];
+      const losers = payload.losers || payload.top_losers || payload.losers?.data || payload.data?.losers || [];
+
+      state.marketMovers = {
+        gainers: gainers.map(normalizeMoverEntry).filter(Boolean),
+        losers: losers.map(normalizeMoverEntry).filter(Boolean)
+      };
+      state.selectedPeers = buildComparePeers(state.currentSymbol);
+      renderScanner();
+      renderResearchSidebar();
+    }
+  } catch (e) {
+    console.error('[API] Failed to load movers:', e);
+  }
+};
+
+const loadSelectedSymbolResearch = async (symbol) => {
+  const selected = normalizeResearchSymbol(symbol);
+  const requestId = ++state.symbolRequestId;
+  state.selectedSnapshot = null;
+  state.selectedNews = [];
+  state.selectedPeers = buildComparePeers(selected);
+  renderResearchSidebar();
+
+  try {
+    const [snapshotResult, newsResult] = await Promise.all([
+      api.get(`/api/market/snapshot/${selected}`),
+      api.get(`/api/market/news?symbol=${selected}&limit=6&include_content=false`)
+    ]);
+
+    if (requestId !== state.symbolRequestId) return;
+
+    if (snapshotResult.success) {
+      state.selectedSnapshot = snapshotResult.data || null;
+    }
+
+    if (newsResult.success) {
+      state.selectedNews = Array.isArray(newsResult.data) ? newsResult.data : [];
+    }
+
+    state.selectedPeers = buildComparePeers(selected);
+    renderSelectedSymbolSummary();
+    renderNewsFeed();
+    renderCompareStrip();
+    renderResearchSidebar();
+  } catch (e) {
+    if (requestId !== state.symbolRequestId) return;
+    console.error('[API] Failed to load selected symbol research:', e);
+    renderSelectedSymbolSummary();
+    renderNewsFeed();
+    renderCompareStrip();
+  }
+};
+
+const selectSymbol = (symbol, options = {}) => {
+  const selected = normalizeResearchSymbol(symbol);
+  if (!selected) return;
+
+  const {
+    loadResearch = true,
+    loadChartData = true,
+    source = 'ui'
+  } = options;
+
+  console.log('[UI] Selecting symbol from', source, ':', selected);
+  state.currentSymbol = selected;
+
+  const chartInput = document.getElementById('chart-symbol');
+  if (chartInput) chartInput.value = selected;
+
+  if (loadChartData) {
+    loadChart(selected, state.timeframe);
+  }
+
+  if (loadResearch) {
+    loadSelectedSymbolResearch(selected);
+  }
+
+  renderScanner();
+  renderWatchlist();
+  renderResearchSidebar();
+  renderExecutionSummary();
 };
 
 const renderEquityChart = (data) => {
@@ -650,6 +1030,7 @@ const loadChart = async (symbol, timeframe) => {
       
       console.log('[Chart] Updating chart with', bars.length, 'candles');
       updateChart(bars, timeframe);
+      renderResearchSidebar();
       
       const lastBar = bars[bars.length - 1];
       const firstBar = bars[0];
@@ -2035,12 +2416,11 @@ const renderAccount = () => {
   document.getElementById('cash-balance').textContent = formatMoney(acc.cash);
   document.getElementById('portfolio-value').textContent = formatMoney(acc.portfolio_value);
   
-  const pnl = parseFloat(acc.equity) - parseFloat(acc.cash);
+  const pnl = Number.isFinite(state.dailyPnL) && state.portfolioHistory ? state.dailyPnL : (parseFloat(acc.equity) - parseFloat(acc.cash));
   const pnlEl = document.getElementById('day-pnl');
   pnlEl.textContent = formatMoney(pnl);
   pnlEl.className = 'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
-  
-  document.getElementById('account-status').textContent = acc.status;
+  renderRiskJournal();
 };
 
 const renderClock = () => {
@@ -2134,9 +2514,7 @@ const renderWatchlist = () => {
     row.onclick = (e) => {
       if (e.target.classList.contains('remove-wl-btn') || 
           e.target.classList.contains('note-btn')) return;
-      state.currentSymbol = symbol;
-      document.getElementById('chart-symbol').value = symbol;
-      loadChart(symbol, state.timeframe);
+      selectSymbol(symbol, { source: 'watchlist' });
     };
     row.title = 'Click to load chart';
     
@@ -2203,9 +2581,7 @@ const renderPositions = () => {
     const row = document.createElement('tr');
     row.dataset.symbol = pos.symbol;
     row.onclick = () => {
-      state.currentSymbol = pos.symbol;
-      document.getElementById('chart-symbol').value = pos.symbol;
-      loadChart(pos.symbol, state.timeframe);
+      selectSymbol(pos.symbol, { source: 'position' });
     };
     
     row.innerHTML = `
@@ -2245,6 +2621,7 @@ const renderPositions = () => {
   });
   
   renderWatchlist();
+  renderRiskJournal();
 };
 
 const renderOrders = () => {
@@ -2295,6 +2672,490 @@ const renderOrders = () => {
       }
     };
   });
+
+  renderRiskJournal();
+};
+
+const renderSelectedSymbolSummary = () => {
+  const summary = getSelectedSymbolSummary();
+  const symbolEls = [
+    document.getElementById('selected-symbol'),
+    document.getElementById('selected-chart-symbol')
+  ].filter(Boolean);
+  const lastEls = [
+    document.getElementById('selected-last'),
+    document.getElementById('selected-chart-last')
+  ].filter(Boolean);
+  const changeEls = [
+    document.getElementById('selected-change'),
+    document.getElementById('selected-chart-change')
+  ].filter(Boolean);
+  const bidEls = [
+    document.getElementById('selected-bid'),
+    document.getElementById('selected-chart-bid')
+  ].filter(Boolean);
+  const askEls = [
+    document.getElementById('selected-ask'),
+    document.getElementById('selected-chart-ask')
+  ].filter(Boolean);
+  const highEls = [
+    document.getElementById('selected-high'),
+    document.getElementById('selected-chart-high')
+  ].filter(Boolean);
+  const lowEls = [
+    document.getElementById('selected-low'),
+    document.getElementById('selected-chart-low')
+  ].filter(Boolean);
+  const volumeEls = [
+    document.getElementById('selected-volume'),
+    document.getElementById('selected-chart-volume')
+  ].filter(Boolean);
+  const updateEls = [
+    document.getElementById('selected-updated'),
+    document.getElementById('selected-chart-updated')
+  ].filter(Boolean);
+  const sessionEls = [
+    document.getElementById('selected-session'),
+    document.getElementById('selected-chart-session')
+  ].filter(Boolean);
+  const notePreviewEl = document.getElementById('selected-note-preview');
+
+  symbolEls.forEach((el) => {
+    el.textContent = summary.symbol || '--';
+  });
+  lastEls.forEach((el) => {
+    el.textContent = summary.last === '--' ? '--' : formatMoney(summary.last);
+  });
+  changeEls.forEach((el) => {
+    el.textContent = formatPercent(summary.changePercent || 0);
+    el.className = `selected-change ${summary.changePercent >= 0 ? 'positive' : 'negative'}`;
+  });
+  bidEls.forEach((el) => {
+    el.textContent = summary.bid === '--' ? '--' : formatMoney(summary.bid);
+  });
+  askEls.forEach((el) => {
+    el.textContent = summary.ask === '--' ? '--' : formatMoney(summary.ask);
+  });
+  highEls.forEach((el) => {
+    el.textContent = summary.high === '--' ? '--' : formatMoney(summary.high);
+  });
+  lowEls.forEach((el) => {
+    el.textContent = summary.low === '--' ? '--' : formatMoney(summary.low);
+  });
+  volumeEls.forEach((el) => {
+    el.textContent = summary.volume ? Number(summary.volume).toLocaleString() : '--';
+  });
+  updateEls.forEach((el) => {
+    el.textContent = summary.updatedAt ? formatRelativeTime(summary.updatedAt) : '--';
+  });
+
+  sessionEls.forEach((el) => {
+    const isOpen = state.clock?.is_open;
+    el.textContent = isOpen ? 'Market open' : 'Market closed';
+    el.className = `session-pill ${isOpen ? 'open' : 'closed'}`;
+  });
+
+  if (notePreviewEl) {
+    const note = state.symbolNotes[summary.symbol] || '';
+    notePreviewEl.textContent = note || 'No note saved for this symbol yet.';
+  }
+};
+
+const renderRelatedSymbols = () => {
+  const list = document.getElementById('related-symbol-list');
+  if (!list) return;
+
+  list.innerHTML = '';
+  const symbols = [state.currentSymbol, ...state.selectedPeers].filter(Boolean);
+  const unique = [...new Set(symbols.map(normalizeResearchSymbol))].slice(0, 4);
+
+  if (unique.length === 0) {
+    list.innerHTML = '<div class="related-empty">Select a symbol to see peers.</div>';
+    return;
+  }
+
+  unique.forEach((symbol) => {
+    const summary = getSelectedSymbolSummary(symbol);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'related-symbol' + (symbol === state.currentSymbol ? ' active' : '');
+    btn.innerHTML = `
+      <span class="related-symbol-name">${symbol}</span>
+      <span class="related-symbol-last">${summary.last === '--' ? '--' : formatMoney(summary.last)}</span>
+    `;
+    btn.onclick = () => selectSymbol(symbol, { source: 'related' });
+    list.appendChild(btn);
+  });
+};
+
+const renderScanner = () => {
+  const list = document.getElementById('scanner-list');
+  if (!list) return;
+
+  const rows = getScannerSymbols();
+  list.innerHTML = '';
+
+  if (rows.length === 0) {
+    list.innerHTML = '<div class="scanner-empty">No symbols match this filter.</div>';
+    return;
+  }
+
+  rows.forEach((item) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'scanner-row' + (item.symbol === state.currentSymbol ? ' active' : '') + (item.hasPosition ? ' has-position' : '');
+    row.dataset.symbol = item.symbol;
+    const summary = getSelectedSymbolSummary(item.symbol);
+    const changeValue = Number.isFinite(summary.changePercent) ? summary.changePercent : 0;
+    row.innerHTML = `
+      <span class="scanner-symbol">
+        <span>${item.symbol}</span>
+        <span class="scanner-badges">
+          ${item.hasPosition ? '<span class="scanner-badge position">POS</span>' : ''}
+          ${item.hasNote ? '<span class="scanner-badge note">NOTE</span>' : ''}
+        </span>
+      </span>
+      <span class="scanner-meta">
+        <span class="scanner-last">${summary.last === '--' ? '--' : formatMoney(summary.last)}</span>
+        <span class="scanner-change ${changeValue >= 0 ? 'positive' : 'negative'}">${formatPercent(changeValue)}</span>
+      </span>
+    `;
+    row.onclick = () => selectSymbol(item.symbol, { source: 'scanner' });
+    list.appendChild(row);
+  });
+};
+
+const renderNewsFeed = () => {
+  const list = document.getElementById('selected-news-list');
+  if (!list) return;
+
+  list.innerHTML = '';
+  const news = state.selectedNews || [];
+
+  if (!news.length) {
+    list.innerHTML = '<div class="news-empty">No recent news for this symbol.</div>';
+    return;
+  }
+
+  news.forEach((item) => {
+    const headline = item.headline || item.title || 'Untitled';
+    const source = item.source || item.author || 'Alpaca';
+    const timestamp = item.created_at || item.updated_at || item.published_at || item.date || null;
+    const summary = item.summary || item.content || '';
+    const url = item.url || '#';
+
+    const article = document.createElement('a');
+    article.className = 'news-item';
+    article.href = url;
+    article.target = '_blank';
+    article.rel = 'noreferrer';
+    article.innerHTML = `
+      <div class="news-headline">${headline}</div>
+      <div class="news-meta">
+        <span>${source}</span>
+        <span>${formatRelativeTime(timestamp)}</span>
+      </div>
+      <div class="news-summary">${summary}</div>
+    `;
+    list.appendChild(article);
+  });
+};
+
+const renderCompareStrip = () => {
+  const strip = document.getElementById('compare-strip');
+  if (!strip) return;
+
+  const current = normalizeResearchSymbol(state.currentSymbol);
+  const symbols = [current, ...state.selectedPeers.filter((sym) => sym !== current)];
+
+  strip.innerHTML = '';
+  symbols.slice(0, 4).forEach((symbol) => {
+    const summary = getSelectedSymbolSummary(symbol);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'compare-chip' + (symbol === current ? ' active' : '');
+    chip.dataset.symbol = symbol;
+    chip.innerHTML = `
+      <span class="compare-symbol">${symbol}</span>
+      <span class="compare-last">${summary.last === '--' ? '--' : formatMoney(summary.last)}</span>
+      <span class="compare-change ${summary.changePercent >= 0 ? 'positive' : 'negative'}">${formatPercent(summary.changePercent || 0)}</span>
+    `;
+    chip.onclick = () => selectSymbol(symbol, { source: 'compare' });
+    strip.appendChild(chip);
+  });
+};
+
+const renderRiskMetrics = () => {
+  const risk = computeRiskSnapshot();
+  const bindText = (id, value, formatter = (v) => v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = formatter(value);
+  };
+
+  bindText('risk-posture', risk.posture);
+  bindText('risk-score', `${risk.score}/100`);
+  bindText('risk-equity', risk.equity, formatMoney);
+  bindText('risk-gross', risk.grossExposure, formatMoney);
+  bindText('risk-net', risk.netExposure, formatMoney);
+  bindText('risk-largest', risk.concentrationPct, (value) => `${value.toFixed(1)}%`);
+  bindText('risk-open-orders', risk.openOrderRisk, formatMoney);
+  bindText('risk-cash', risk.cashPct, (value) => `${value.toFixed(1)}%`);
+  bindText('risk-unrealized', risk.unrealizedPnL, formatMoney);
+  bindText('risk-day-pnl', risk.dayPnL, formatMoney);
+  bindText('risk-day-change', risk.dayChange, formatMoney);
+  bindText('risk-day-change-pct', risk.dayChangePct, formatPercent);
+  bindText('risk-position-count', risk.positionCount.toString());
+  bindText('risk-order-count', risk.activeOrders.toString());
+  bindText('risk-alert-count', risk.alertsCount.toString());
+  bindText('risk-journal-count', risk.journalCount.toString());
+
+  const toneValue = (id, value, baseClass = 'risk-metric-value') => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = `${baseClass} ${value >= 0 ? 'positive' : 'negative'}`;
+  };
+  toneValue('risk-net', risk.netExposure);
+  toneValue('risk-unrealized', risk.unrealizedPnL);
+  toneValue('risk-day-pnl', risk.dayPnL);
+  toneValue('risk-day-change', risk.dayChange, 'risk-metric-subtle');
+  toneValue('risk-day-change-pct', risk.dayChangePct, 'risk-metric-subtle');
+
+  const postureEl = document.getElementById('risk-posture');
+  if (postureEl) {
+    postureEl.className = `risk-posture badge posture-${risk.posture.toLowerCase()}`;
+  }
+
+  const riskBar = document.getElementById('risk-bar-fill');
+  if (riskBar) {
+    riskBar.style.width = `${Math.min(100, risk.score)}%`;
+    riskBar.dataset.posture = risk.posture.toLowerCase();
+  }
+};
+
+const renderJournalEntries = () => {
+  const list = document.getElementById('journal-list');
+  const count = document.getElementById('journal-count');
+  if (!list) return;
+
+  const entries = [...state.journalEntries]
+    .map(normalizeJournalEntry)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  state.journalEntries = entries;
+  if (count) count.textContent = `${entries.length} entries`;
+
+  list.innerHTML = '';
+
+  if (!entries.length) {
+    list.innerHTML = '<div class="journal-empty">No journal entries yet.</div>';
+    return;
+  }
+
+  entries.slice(0, 10).forEach((entry) => {
+    const card = document.createElement('article');
+    card.className = 'journal-entry';
+    card.innerHTML = `
+      <div class="journal-entry-head">
+        <button type="button" class="journal-symbol" data-symbol="${entry.symbol}">${entry.symbol}</button>
+        <span class="journal-stance stance-${entry.stance.toLowerCase()}">${entry.stance}</span>
+        <span class="journal-stage">${entry.stage}</span>
+        <button type="button" class="journal-delete" data-entry-id="${entry.id}" aria-label="Delete journal entry">×</button>
+      </div>
+      <div class="journal-entry-meta">${formatRelativeTime(entry.createdAt)}</div>
+      <div class="journal-entry-title">${entry.title || 'Untitled trade thesis'}</div>
+      <div class="journal-entry-note">${entry.note || 'No notes written yet.'}</div>
+    `;
+    card.querySelector('.journal-symbol').onclick = () => selectSymbol(entry.symbol, { source: 'journal' });
+    card.querySelector('.journal-delete').onclick = () => deleteJournalEntry(entry.id);
+    list.appendChild(card);
+  });
+};
+
+const addJournalEntry = (entry) => {
+  const normalized = normalizeJournalEntry(entry);
+  if (!normalized) return;
+
+  state.journalEntries = [normalized, ...state.journalEntries.filter((item) => item.id !== normalized.id)];
+  saveJournalEntries();
+  renderRiskJournal(true);
+};
+
+const deleteJournalEntry = (entryId) => {
+  state.journalEntries = state.journalEntries.filter((entry) => entry.id !== entryId);
+  saveJournalEntries();
+  renderRiskJournal(true);
+};
+
+const renderRiskJournal = (refreshJournal = false) => {
+  renderRiskMetrics();
+  if (refreshJournal) {
+    renderJournalEntries();
+  }
+};
+
+const computeExecutionSummary = () => {
+  const summary = getSelectedSymbolSummary(state.currentSymbol);
+  const account = state.account || {};
+  const activeOrders = getActiveOrders();
+  return {
+    symbol: summary.symbol,
+    last: summary.last,
+    buyingPower: parseFloat(account.buying_power || 0) || 0,
+    activeOrders: activeOrders.length,
+    session: state.clock?.is_open ? 'Open' : 'Closed',
+    positionQty: (state.positions.find((pos) => pos.symbol === summary.symbol)?.qty) || '0'
+  };
+};
+
+const renderExecutionSummary = () => {
+  const summary = computeExecutionSummary();
+  const bind = (id, value, formatter = (v) => v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = formatter(value);
+  };
+
+  bind('exec-order-symbol', summary.symbol);
+  bind('exec-order-last', summary.last === '--' ? '--' : formatMoney(summary.last));
+  bind('exec-buying-power', summary.buyingPower, formatMoney);
+  bind('exec-active-orders', summary.activeOrders.toString());
+  bind('exec-session', summary.session);
+
+  const reduceOnly = document.getElementById('reduce-only');
+  if (reduceOnly) {
+    const hasPosition = state.positions.some((pos) => pos.symbol === summary.symbol);
+    reduceOnly.disabled = !hasPosition;
+    reduceOnly.checked = hasPosition && reduceOnly.checked;
+  }
+};
+
+const setOrderPreset = (preset) => {
+  const qtyInput = document.getElementById('order-qty');
+  const notionalInput = document.getElementById('order-notional');
+  const mode = document.getElementById('order-mode');
+  const account = state.account || {};
+  const buyingPower = parseFloat(account.buying_power || 0) || 0;
+  const summary = getSelectedSymbolSummary();
+  const referencePrice = (() => {
+    if (summary.last && summary.last !== '--') return parseFloat(summary.last) || 0;
+    const q = state.watchlistQuotes[state.currentSymbol] || {};
+    return parseFloat(q.last || q.ask || 0) || 0;
+  })();
+
+  if (preset === 'notional-1' || preset === 'notional-5') {
+    if (mode) mode.value = 'notional';
+    const pct = preset === 'notional-1' ? 0.01 : 0.05;
+    if (notionalInput) notionalInput.value = Math.max(1, buyingPower * pct).toFixed(2);
+    if (qtyInput) qtyInput.value = referencePrice > 0 ? Math.max(1, Math.floor((buyingPower * pct) / referencePrice)).toString() : '1';
+    return;
+  }
+
+  if (mode) mode.value = 'qty';
+  if (qtyInput) qtyInput.value = preset;
+  if (notionalInput) {
+    const qty = parseFloat(preset) || 0;
+    const est = qty > 0 && referencePrice > 0 ? qty * referencePrice : 0;
+    notionalInput.value = est ? est.toFixed(2) : '';
+  }
+};
+
+const setOrderSide = (side) => {
+  document.querySelectorAll('.side-btn').forEach((b) => b.classList.toggle('active', b.dataset.side === side));
+};
+
+const setOrderType = (type) => {
+  const orderTypeSel = document.getElementById('order-type');
+  if (orderTypeSel) {
+    orderTypeSel.value = type;
+    orderTypeSel.dispatchEvent(new Event('change'));
+  }
+};
+
+const setOrderClass = (orderClass) => {
+  const orderClassSel = document.getElementById('order-class');
+  if (orderClassSel) {
+    orderClassSel.value = orderClass;
+    orderClassSel.dispatchEvent(new Event('change'));
+  }
+};
+
+const prefillExecutionOrder = ({ symbol, side, type = 'market', orderClass = 'simple', mode = null, qty = null, notional = null, takeProfit = null, stopLoss = null, stopPrice = null }) => {
+  const symbolInput = document.getElementById('order-symbol');
+  if (symbolInput && symbol) symbolInput.value = symbol.toUpperCase();
+  if (side) setOrderSide(side);
+  setOrderType(type);
+  setOrderClass(orderClass);
+  if (mode) {
+    const modeSel = document.getElementById('order-mode');
+    if (modeSel) modeSel.value = mode;
+  }
+  if (qty !== null) {
+    const qtyInput = document.getElementById('order-qty');
+    if (qtyInput) qtyInput.value = qty;
+  }
+  if (notional !== null) {
+    const notionalInput = document.getElementById('order-notional');
+    const modeSel = document.getElementById('order-mode');
+    if (modeSel) modeSel.value = 'notional';
+    if (notionalInput) notionalInput.value = notional;
+  }
+  if (takeProfit !== null) {
+    const tpInput = document.getElementById('take-profit-price');
+    if (tpInput) tpInput.value = takeProfit;
+  }
+  if (stopLoss !== null) {
+    const slInput = document.getElementById('stop-loss-price');
+    if (slInput) slInput.value = stopLoss;
+  }
+  if (stopPrice !== null) {
+    const stopInput = document.getElementById('stop-price');
+    if (stopInput) stopInput.value = stopPrice;
+  }
+  updateExecutionFormVisibility();
+  updateOrderEstimate();
+};
+
+const updateExecutionFormVisibility = () => {
+  const type = document.getElementById('order-type')?.value;
+  const orderClass = document.getElementById('order-class')?.value || 'simple';
+  const mode = document.getElementById('order-mode')?.value || 'qty';
+
+  const limitRow = document.querySelector('.limit-price-row');
+  const stopRow = document.querySelector('.stop-price-row');
+  const trailRow = document.querySelector('.trailing-amt-row');
+  const notionalRow = document.getElementById('notional-row');
+  const takeProfitRow = document.getElementById('take-profit-row');
+  const stopLossRow = document.getElementById('stop-loss-row');
+  const qtyInput = document.getElementById('order-qty');
+  const notionalInput = document.getElementById('order-notional');
+  const qtyRow = document.getElementById('order-qty')?.closest('.form-row');
+
+  if (limitRow) limitRow.classList.toggle('hidden', type !== 'limit' && type !== 'stop_limit');
+  if (stopRow) stopRow.classList.toggle('hidden', type !== 'stop' && type !== 'stop_limit');
+  if (trailRow) trailRow.classList.toggle('hidden', type !== 'trailing_stop');
+  if (notionalRow) notionalRow.classList.toggle('hidden', mode !== 'notional');
+  if (qtyRow) qtyRow.classList.toggle('hidden', mode === 'notional');
+  if (takeProfitRow) takeProfitRow.classList.toggle('hidden', orderClass === 'simple');
+  if (stopLossRow) stopLossRow.classList.toggle('hidden', orderClass === 'simple');
+  if (qtyInput) qtyInput.required = mode === 'qty';
+  if (notionalInput) notionalInput.required = mode === 'notional';
+
+  const extHours = document.getElementById('extended-hours');
+  if (extHours && type === 'trailing_stop') {
+    extHours.checked = false;
+    extHours.disabled = true;
+  } else if (extHours) {
+    extHours.disabled = false;
+  }
+};
+
+let updateOrderEstimate = () => {};
+
+const renderResearchSidebar = () => {
+  renderSelectedSymbolSummary();
+  renderCompareStrip();
+  renderNewsFeed();
+  renderRelatedSymbols();
 };
 
 const render = async () => {
@@ -2310,10 +3171,11 @@ const render = async () => {
   
   // Load activities
   loadActivities();
+  loadMovers();
   
   console.log('[App] Loading default chart:', state.currentSymbol, state.timeframe);
   initChart();
-  loadChart(state.currentSymbol, state.timeframe);
+  selectSymbol(state.currentSymbol, { source: 'init' });
 };
 
 const addToWatchlist = () => {
@@ -2351,14 +3213,18 @@ const addToWatchlist = () => {
             bid: parseFloat(q.bp || 0),
             ask: parseFloat(q.ap || 0),
             last: trade ? parseFloat(trade.p) : parseFloat(q.ap || q.bp || 0),
-            change: change
+            change: change,
+            volume: snapshot.dailyBar?.v || 0
           };
         }
       }
       renderWatchlist();
+      renderScanner();
+      if (symbol === state.currentSymbol) renderResearchSidebar();
     });
     
     renderWatchlist();
+    renderScanner();
   }
 };
 
@@ -2370,6 +3236,8 @@ const removeFromWatchlist = (symbol) => {
     localStorage.setItem('watchlists', JSON.stringify(state.watchlists));
     delete state.watchlistQuotes[symbol];
     renderWatchlist();
+    renderScanner();
+    renderResearchSidebar();
   }
 };
 
@@ -2398,6 +3266,8 @@ const switchWatchlist = (name) => {
   
   renderWatchlistTabs();
   renderWatchlist();
+  renderScanner();
+  renderResearchSidebar();
 
   // Lazy-load: only fetch snapshots if this tab hasn't been loaded yet
   if (!state.alertedTabs[name]) {
@@ -2462,6 +3332,7 @@ const saveSymbolNote = (symbol, note) => {
   }
   localStorage.setItem('symbolNotes', JSON.stringify(state.symbolNotes));
   renderWatchlist();
+  renderResearchSidebar();
 };
 
 // Open note modal for a symbol
@@ -2549,82 +3420,147 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
   
   document.getElementById('order-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
-    const symbol = document.getElementById('order-symbol').value.toUpperCase();
-    const qty = parseInt(document.getElementById('order-qty').value);
-    const side = document.querySelector('.side-btn.active').dataset.side;
+
+    const symbol = document.getElementById('order-symbol').value.toUpperCase().trim();
+    const side = document.querySelector('.side-btn.active')?.dataset.side || 'buy';
     const type = document.getElementById('order-type').value;
-    const limitPrice = document.getElementById('limit-price').value;
-    const stopPrice = document.getElementById('stop-price').value;
-    const trailAmount = document.getElementById('trail-amount').value;
+    const orderClass = document.getElementById('order-class').value || 'simple';
+    const orderMode = document.getElementById('order-mode').value || 'qty';
+    const qtyValue = parseFloat(document.getElementById('order-qty').value);
+    const notionalValue = parseFloat(document.getElementById('order-notional').value);
+    const limitPrice = parseFloat(document.getElementById('limit-price').value);
+    const stopPrice = parseFloat(document.getElementById('stop-price').value);
+    const takeProfitPrice = parseFloat(document.getElementById('take-profit-price').value);
+    const stopLossPrice = parseFloat(document.getElementById('stop-loss-price').value);
+    const trailAmount = document.getElementById('trail-amount').value.trim();
     const timeInForce = document.getElementById('time-in-force').value;
+    const extendedHours = document.getElementById('extended-hours').checked;
+    const reduceOnly = document.getElementById('reduce-only').checked;
     const feedback = document.getElementById('order-feedback');
-    
-    if (!symbol || qty <= 0) {
-      feedback.textContent = 'Invalid symbol or quantity';
+
+    if (!symbol || !validateSymbol(symbol)) {
+      feedback.textContent = 'Invalid symbol';
       feedback.className = 'order-feedback error';
       return;
     }
-    
-    if ((type === 'limit' || type === 'stop_limit' || type === 'take_profit') && !limitPrice) {
+
+    if (orderMode === 'qty' && (!validateQty(qtyValue) || qtyValue <= 0)) {
+      feedback.textContent = 'Invalid quantity';
+      feedback.className = 'order-feedback error';
+      return;
+    }
+
+    if (orderMode === 'notional' && (!validatePrice(notionalValue) || notionalValue <= 0)) {
+      feedback.textContent = 'Invalid notional value';
+      feedback.className = 'order-feedback error';
+      return;
+    }
+
+    if ((type === 'limit' || type === 'stop_limit') && !validatePrice(limitPrice)) {
       feedback.textContent = 'Limit price required';
       feedback.className = 'order-feedback error';
       return;
     }
-    
-    if ((type === 'stop' || type === 'stop_limit') && !stopPrice) {
+
+    if ((type === 'stop' || type === 'stop_limit') && !validatePrice(stopPrice)) {
       feedback.textContent = 'Stop price required';
       feedback.className = 'order-feedback error';
       return;
     }
-    
+
     if (type === 'trailing_stop' && !trailAmount) {
       feedback.textContent = 'Trail amount required';
       feedback.className = 'order-feedback error';
       return;
     }
-    
+
+    if (orderClass !== 'simple' && type === 'trailing_stop') {
+      feedback.textContent = 'Trailing stop cannot be combined with bracket or OCO';
+      feedback.className = 'order-feedback error';
+      return;
+    }
+
+    if (orderClass !== 'simple' && (!validatePrice(takeProfitPrice) || !validatePrice(stopLossPrice))) {
+      feedback.textContent = 'Bracket/OCO orders need take profit and stop loss values';
+      feedback.className = 'order-feedback error';
+      return;
+    }
+
+    if (reduceOnly) {
+      const pos = state.positions.find((item) => item.symbol === symbol);
+      if (!pos) {
+        feedback.textContent = 'Reduce only requires an existing position';
+        feedback.className = 'order-feedback error';
+        return;
+      }
+      if (side !== 'sell') {
+        feedback.textContent = 'Reduce only is only valid for sell orders';
+        feedback.className = 'order-feedback error';
+        return;
+      }
+      if (orderMode === 'qty' && qtyValue > parseFloat(pos.qty || 0)) {
+        feedback.textContent = 'Reduce only quantity cannot exceed the open position';
+        feedback.className = 'order-feedback error';
+        return;
+      }
+    }
+
     const order = {
       symbol,
-      qty,
       side,
       type,
       time_in_force: timeInForce
     };
-    
+
+    if (orderMode === 'notional') {
+      order.notional = notionalValue;
+    } else {
+      order.qty = qtyValue;
+    }
+
+    if (orderClass !== 'simple') {
+      order.order_class = orderClass;
+      order.take_profit = { limit_price: takeProfitPrice };
+      order.stop_loss = { stop_price: stopLossPrice };
+    }
+
     if (type === 'limit' || type === 'stop_limit') {
-      order.limit_price = parseFloat(limitPrice);
+      order.limit_price = limitPrice;
     }
     if (type === 'stop' || type === 'stop_limit') {
-      order.stop_price = parseFloat(stopPrice);
-    }
-    if (type === 'take_profit') {
-      order.limit_price = parseFloat(limitPrice);
+      order.stop_price = stopPrice;
     }
     if (type === 'trailing_stop') {
       if (trailAmount.endsWith('%')) {
         order.trail_percent = parseFloat(trailAmount);
       } else {
-        order.trail = parseFloat(trailAmount);
+        order.trail_price = parseFloat(trailAmount);
       }
     }
-    
+
+    if (extendedHours) {
+      order.extended_hours = true;
+    }
     feedback.textContent = 'Submitting...';
     feedback.className = 'order-feedback';
-    
+
     try {
       const result = await api.post('/api/orders', order);
-      
+
       if (result.success) {
         feedback.textContent = 'Order placed successfully!';
         feedback.className = 'order-feedback success';
         loadOrders();
-        
-        document.getElementById('order-symbol').value = '';
+        loadPositions();
+        loadAccount();
+
         document.getElementById('order-qty').value = '1';
+        document.getElementById('order-notional').value = '';
         document.getElementById('limit-price').value = '';
         document.getElementById('stop-price').value = '';
         document.getElementById('trail-amount').value = '';
+        document.getElementById('take-profit-price').value = '';
+        document.getElementById('stop-loss-price').value = '';
       } else {
         feedback.textContent = result.error || 'Failed to place order';
         feedback.className = 'order-feedback error';
@@ -2633,28 +3569,36 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
       feedback.textContent = 'Error placing order';
       feedback.className = 'order-feedback error';
     }
-    
+
     setTimeout(() => {
       feedback.textContent = '';
       feedback.className = 'order-feedback';
     }, 5000);
   });
-  
-  document.getElementById('order-type').addEventListener('change', (e) => {
-    const type = e.target.value;
-    const limitRow = document.querySelector('.limit-price-row');
-    const stopRow = document.querySelector('.stop-price-row');
-    const trailRow = document.querySelector('.trailing-amt-row');
 
-    limitRow.classList.toggle('hidden', type !== 'limit' && type !== 'stop_limit' && type !== 'take_profit');
-    stopRow.classList.toggle('hidden', type !== 'stop' && type !== 'stop_limit');
-    trailRow.classList.toggle('hidden', type !== 'trailing_stop');
-});
+  document.getElementById('order-type').addEventListener('change', (e) => {
+    updateExecutionFormVisibility();
+    updateOrderEstimate();
+  });
+
+  document.getElementById('order-class').addEventListener('change', () => {
+    updateExecutionFormVisibility();
+    updateOrderEstimate();
+  });
+
+  document.getElementById('order-mode').addEventListener('change', () => {
+    updateExecutionFormVisibility();
+    updateOrderEstimate();
+  });
+
+  document.getElementById('extended-hours').addEventListener('change', updateOrderEstimate);
 
   // Update order estimate when symbol, qty, or price changes (debounced 150ms)
   const _doEstimate = () => {
     const symbol = (document.getElementById('order-symbol')?.value || '').toUpperCase();
-    const qty = parseInt(document.getElementById('order-qty')?.value) || 0;
+    const orderMode = document.getElementById('order-mode')?.value || 'qty';
+    const qty = parseFloat(document.getElementById('order-qty')?.value) || 0;
+    const notional = parseFloat(document.getElementById('order-notional')?.value) || 0;
     const limitPrice = parseFloat(document.getElementById('limit-price')?.value);
     const stopPrice = parseFloat(document.getElementById('stop-price')?.value);
     const type = document.getElementById('order-type')?.value;
@@ -2667,18 +3611,67 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
     else if (type === 'stop' && stopPrice) { price = stopPrice; }
     else if (type === 'stop_limit') { price = limitPrice || null; }
     else { const q = state.watchlistQuotes[symbol]; price = q?.last || q?.ask; }
-    const estimate = (price && qty > 0) ? (price * qty) : 0;
+    const estimate = orderMode === 'notional' ? notional : (price && qty > 0 ? price * qty : 0);
     const el = document.getElementById('order-estimate');
     if (el) el.textContent = formatMoney(estimate);
+    renderExecutionSummary();
   };
-  const updateOrderEstimate = debounce(_doEstimate, 150);
+  updateOrderEstimate = debounce(_doEstimate, 150);
 
-  ['order-symbol', 'order-qty', 'limit-price', 'stop-price'].forEach(id => {
+  ['order-symbol', 'order-qty', 'order-notional', 'limit-price', 'stop-price', 'take-profit-price', 'stop-loss-price', 'trail-amount'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updateOrderEstimate);
   });
   const orderTypeSel = document.getElementById('order-type');
   if (orderTypeSel) orderTypeSel.addEventListener('change', updateOrderEstimate);
+
+  document.querySelectorAll('.order-quick-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.execAction;
+      const summary = getSelectedSymbolSummary(state.currentSymbol);
+      const last = summary.last && summary.last !== '--' ? parseFloat(summary.last) : 0;
+      switch (action) {
+        case 'use-selected':
+          prefillExecutionOrder({ symbol: state.currentSymbol, side: 'buy', type: 'market', mode: 'qty', qty: '1' });
+          break;
+        case 'buy-market':
+          prefillExecutionOrder({ symbol: state.currentSymbol, side: 'buy', type: 'market', mode: 'qty', qty: '1' });
+          document.getElementById('order-symbol')?.focus();
+          break;
+        case 'sell-market':
+          prefillExecutionOrder({ symbol: state.currentSymbol, side: 'sell', type: 'market', mode: 'qty', qty: '1' });
+          document.getElementById('order-symbol')?.focus();
+          break;
+        case 'buy-bracket':
+          prefillExecutionOrder({
+            symbol: state.currentSymbol,
+            side: 'buy',
+            type: 'market',
+            orderClass: 'bracket',
+            mode: 'qty',
+            qty: '1',
+            takeProfit: last ? (last * 1.03).toFixed(2) : '',
+            stopLoss: last ? (last * 0.98).toFixed(2) : ''
+          });
+          break;
+        case 'sell-stop':
+          prefillExecutionOrder({
+            symbol: state.currentSymbol,
+            side: 'sell',
+            type: 'stop',
+            orderClass: 'simple',
+            mode: 'qty',
+            qty: '1',
+            stopPrice: last ? (last * 0.98).toFixed(2) : ''
+          });
+          break;
+      }
+      showToast(`Prefilled ${action.replace('-', ' ')} for ${state.currentSymbol}`, 'info');
+    });
+  });
+
+  updateExecutionFormVisibility();
+  renderExecutionSummary();
 
   document.querySelectorAll('.side-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -2829,6 +3822,98 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
   // Theme toggle button
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
 
+  document.getElementById('refresh-radar').addEventListener('click', () => {
+    loadMovers();
+    loadSelectedSymbolResearch(state.currentSymbol);
+  });
+
+  document.getElementById('scanner-search').addEventListener('input', (e) => {
+    state.scannerQuery = e.target.value.toUpperCase();
+    renderScanner();
+  });
+
+  document.querySelectorAll('.scanner-filter').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const filter = e.target.dataset.filter;
+      state.scannerFilter = filter;
+      document.querySelectorAll('.scanner-filter').forEach((b) => b.classList.remove('active'));
+      e.target.classList.add('active');
+      renderScanner();
+    });
+  });
+
+  document.getElementById('edit-selected-note').addEventListener('click', () => {
+    openNoteModal(state.currentSymbol);
+  });
+  document.getElementById('research-note-btn').addEventListener('click', () => {
+    openNoteModal(state.currentSymbol);
+  });
+  document.getElementById('research-alert-btn').addEventListener('click', () => {
+    const symbolInput = document.getElementById('alert-symbol');
+    if (symbolInput) symbolInput.value = state.currentSymbol;
+    showToast(`Prefilled alert for ${state.currentSymbol}`, 'info');
+  });
+  document.getElementById('research-order-btn').addEventListener('click', () => {
+    const orderSymbol = document.getElementById('order-symbol');
+    if (orderSymbol) {
+      orderSymbol.value = state.currentSymbol;
+      orderSymbol.focus();
+    }
+    showToast(`Prefilled order ticket for ${state.currentSymbol}`, 'info');
+  });
+
+  const journalSymbolInput = document.getElementById('journal-symbol');
+  if (journalSymbolInput) {
+    journalSymbolInput.addEventListener('input', (e) => {
+      e.target.value = e.target.value.toUpperCase();
+    });
+  }
+
+  document.getElementById('use-selected-symbol').addEventListener('click', () => {
+    const journalSymbol = document.getElementById('journal-symbol');
+    if (journalSymbol) journalSymbol.value = state.currentSymbol;
+    showToast(`Journal symbol set to ${state.currentSymbol}`, 'info');
+  });
+
+  document.getElementById('journal-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const symbol = document.getElementById('journal-symbol').value.toUpperCase().trim();
+    const stance = document.getElementById('journal-stance').value;
+    const stage = document.getElementById('journal-stage').value;
+    const title = document.getElementById('journal-title').value.trim();
+    const note = document.getElementById('journal-note').value.trim();
+
+    if (!symbol) {
+      showToast('Enter a symbol before saving the journal entry', 'warning');
+      return;
+    }
+
+    addJournalEntry({
+      id: Date.now(),
+      symbol,
+      stance,
+      stage,
+      title,
+      note,
+      createdAt: new Date().toISOString()
+    });
+
+    document.getElementById('journal-title').value = '';
+    document.getElementById('journal-note').value = '';
+    showToast(`Saved journal entry for ${symbol}`, 'success');
+  });
+
+  document.getElementById('clear-journal').addEventListener('click', () => {
+    if (!confirm('Clear all journal entries?')) return;
+    state.journalEntries = [];
+    saveJournalEntries();
+    renderRiskJournal(true);
+  });
+
+  document.getElementById('refresh-risk').addEventListener('click', () => {
+    renderRiskJournal();
+  });
+
   // Sample Dashboard video button
   const videoModal = document.getElementById('video-modal');
   const videoFrame = document.getElementById('video-frame');
@@ -2908,6 +3993,8 @@ const init = async () => {
   
   // Set current watchlist symbols from active watchlist
   state.watchlist = state.watchlists[state.activeWatchlist] || [];
+  state.journalEntries = state.journalEntries.map(normalizeJournalEntry).filter(Boolean);
+  saveJournalEntries();
   
   // Initialize theme
   applyTheme(getStoredTheme());
@@ -2923,12 +4010,16 @@ const init = async () => {
   initResizable();
   renderAlerts();
   renderWatchlistTabs();
+  renderScanner();
+  renderResearchSidebar();
+  renderRiskJournal(true);
   await render();
   
   setInterval(loadPositions, 10000);
   setInterval(loadOrders, 5000);
   setInterval(loadAccount, 15000);
   setInterval(loadActivities, 60000); // Refresh activities every minute
+  setInterval(loadMovers, 60000); // Refresh scanner context every minute
 };
 
 document.addEventListener('DOMContentLoaded', init);

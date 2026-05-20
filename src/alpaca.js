@@ -48,18 +48,83 @@ const getOrders = async (status = 'all', limit = 20) => {
 };
 
 const placeOrder = async (orderData) => {
-  const { symbol, qty, side, type, limit_price, time_in_force } = orderData;
+  const {
+    symbol,
+    qty,
+    notional,
+    side,
+    type,
+    order_class,
+    limit_price,
+    stop_price,
+    trail_price,
+    trail_percent,
+    time_in_force,
+    extended_hours,
+    take_profit,
+    stop_loss
+  } = orderData;
   
   const order = {
     symbol: symbol.toUpperCase(),
-    qty: parseInt(qty),
     side: side.toLowerCase(),
     type: type.toLowerCase(),
     time_in_force: time_in_force || 'day'
   };
 
-  if (type.toLowerCase() === 'limit' && limit_price) {
+  if (qty !== undefined && qty !== null && qty !== '') {
+    order.qty = parseFloat(qty);
+  }
+
+  if (notional !== undefined && notional !== null && notional !== '') {
+    order.notional = parseFloat(notional);
+  }
+
+  if (order_class) {
+    order.order_class = order_class.toLowerCase();
+  }
+
+  if (limit_price !== undefined && limit_price !== null && limit_price !== '') {
     order.limit_price = parseFloat(limit_price);
+  }
+
+  if (stop_price !== undefined && stop_price !== null && stop_price !== '') {
+    order.stop_price = parseFloat(stop_price);
+  }
+
+  if (trail_price !== undefined && trail_price !== null && trail_price !== '') {
+    order.trail_price = parseFloat(trail_price);
+  }
+
+  if (trail_percent !== undefined && trail_percent !== null && trail_percent !== '') {
+    order.trail_percent = parseFloat(trail_percent);
+  }
+
+  if (typeof extended_hours === 'boolean') {
+    order.extended_hours = extended_hours;
+  }
+
+  if (take_profit && typeof take_profit === 'object') {
+    const tp = {};
+    if (take_profit.limit_price !== undefined && take_profit.limit_price !== null && take_profit.limit_price !== '') {
+      tp.limit_price = parseFloat(take_profit.limit_price);
+    }
+    if (Object.keys(tp).length) {
+      order.take_profit = tp;
+    }
+  }
+
+  if (stop_loss && typeof stop_loss === 'object') {
+    const sl = {};
+    if (stop_loss.stop_price !== undefined && stop_loss.stop_price !== null && stop_loss.stop_price !== '') {
+      sl.stop_price = parseFloat(stop_loss.stop_price);
+    }
+    if (stop_loss.limit_price !== undefined && stop_loss.limit_price !== null && stop_loss.limit_price !== '') {
+      sl.limit_price = parseFloat(stop_loss.limit_price);
+    }
+    if (Object.keys(sl).length) {
+      order.stop_loss = sl;
+    }
   }
 
   const response = await client.post('/v2/orders', order);
@@ -175,10 +240,34 @@ const getSnapshot = async (symbol) => {
   return response.data;
 };
 
+const getNews = async ({ symbols, start, end, limit = 10, include_content = false, sort = 'desc' } = {}) => {
+  const params = {
+    limit,
+    include_content,
+    sort
+  };
+
+  if (symbols) {
+    params.symbols = Array.isArray(symbols) ? symbols.join(',') : symbols;
+  }
+  if (start) params.start = start;
+  if (end) params.end = end;
+
+  const response = await dataClient.get('/v1beta1/news', { params });
+  return response.data;
+};
+
 const getSnapshots = async (symbols) => {
   const symbolsParam = Array.isArray(symbols) ? symbols.join(',') : symbols;
   const response = await dataClient.get('/v2/stocks/snapshots', {
     params: { symbols: symbolsParam }
+  });
+  return response.data;
+};
+
+const getMovers = async (marketType = 'stocks', top = 10) => {
+  const response = await dataClient.get(`/v1beta1/screener/${marketType}/movers`, {
+    params: { top }
   });
   return response.data;
 };
@@ -203,7 +292,9 @@ module.exports = {
   getActivities,
   getLatestTrade,
   getSnapshot,
+  getNews,
   getSnapshots,
+  getMovers,
   createClient,
   createAuthHeaders
 };

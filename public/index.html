@@ -33,10 +33,10 @@
     </header>
 
     <main class="dashboard-grid">
-      <section class="panel account-panel">
+      <section class="panel account-panel radar-panel">
         <div class="panel-header">
-          <h2>Account Overview</h2>
-          <button class="close-all-btn" id="close-all-positions">Close All</button>
+          <h2>Radar</h2>
+          <button class="refresh-btn" id="refresh-radar">Refresh Radar</button>
         </div>
         <div class="panel-content">
           <div class="account-stats">
@@ -60,6 +60,48 @@
             <div class="stat-item">
               <span class="stat-label">Day P&L</span>
               <span class="stat-value" id="day-pnl">--</span>
+            </div>
+          </div>
+
+          <div class="scanner-section">
+            <div class="section-heading">
+              <h3>Market Scanner</h3>
+              <input type="text" id="scanner-search" placeholder="Search symbols..." maxlength="10">
+            </div>
+            <div class="scanner-filters">
+              <button type="button" class="scanner-filter active" data-filter="gainers">Gainers</button>
+              <button type="button" class="scanner-filter" data-filter="losers">Losers</button>
+              <button type="button" class="scanner-filter" data-filter="volume">Volume</button>
+              <button type="button" class="scanner-filter" data-filter="positions">Positions</button>
+              <button type="button" class="scanner-filter" data-filter="watchlist">Watchlist</button>
+            </div>
+            <div id="scanner-list" class="scanner-list"></div>
+          </div>
+
+          <div class="watchlist-section">
+            <div class="section-heading watchlist-heading">
+              <h3>Watchlists</h3>
+              <button class="create-wl-btn" id="create-wl-btn">+ New List</button>
+            </div>
+            <div class="watchlist-input">
+              <input type="text" id="watchlist-add" placeholder="Add symbol..." maxlength="5">
+              <button class="add-btn" id="add-symbol-btn">+</button>
+            </div>
+            <div class="watchlist-tabs" id="watchlist-tabs"></div>
+            <div class="watchlist-table-wrap">
+              <table class="data-table watchlist-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Bid</th>
+                    <th>Ask</th>
+                    <th>Last</th>
+                    <th>Chg%</th>
+                  </tr>
+                </thead>
+                <tbody id="watchlist-body">
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -92,6 +134,28 @@
             <span class="price-change" id="chart-change">--</span>
           </div>
         </div>
+        <div class="selected-overview">
+          <div class="selected-overview-heading">
+            <span class="section-kicker">Selected symbol</span>
+            <div class="selected-overview-title">
+              <h3 id="selected-chart-symbol">SPY</h3>
+              <span id="selected-chart-session" class="session-pill">Market closed</span>
+            </div>
+          </div>
+          <div class="selected-overview-price">
+            <span id="selected-chart-last" class="selected-chart-last">--</span>
+            <span id="selected-chart-change" class="selected-change">--</span>
+          </div>
+        </div>
+        <div class="selected-metrics-grid">
+          <div class="metric-pill"><span>Bid</span><strong id="selected-chart-bid">--</strong></div>
+          <div class="metric-pill"><span>Ask</span><strong id="selected-chart-ask">--</strong></div>
+          <div class="metric-pill"><span>High</span><strong id="selected-chart-high">--</strong></div>
+          <div class="metric-pill"><span>Low</span><strong id="selected-chart-low">--</strong></div>
+          <div class="metric-pill"><span>Volume</span><strong id="selected-chart-volume">--</strong></div>
+          <div class="metric-pill"><span>Updated</span><strong id="selected-chart-updated">--</strong></div>
+        </div>
+        <div class="compare-strip" id="compare-strip"></div>
         <div class="panel-content">
           <div id="chart-container"></div>
         </div>
@@ -110,39 +174,55 @@
         </div>
       </section>
 
-      <section class="panel watchlist-panel">
+      <section class="panel watchlist-panel research-panel">
         <div class="panel-header">
-          <h2>Watchlist</h2>
-          <div class="watchlist-input">
-            <input type="text" id="watchlist-add" placeholder="Add symbol..." maxlength="5">
-            <button class="add-btn" id="add-symbol-btn">+</button>
+          <h2>Research Context</h2>
+          <div class="panel-actions">
+            <button class="refresh-btn" id="research-note-btn">Note</button>
+            <button class="refresh-btn" id="research-alert-btn">Alert</button>
+            <button class="refresh-btn" id="research-order-btn">Order</button>
           </div>
         </div>
-        <div class="watchlist-tabs" id="watchlist-tabs"></div>
-        <div class="panel-content">
-          <table class="data-table watchlist-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Bid</th>
-                <th>Ask</th>
-                <th>Last</th>
-                <th>Chg%</th>
-              </tr>
-            </thead>
-            <tbody id="watchlist-body">
-            </tbody>
-          </table>
-        </div>
-        <div class="watchlist-footer">
-          <button class="create-wl-btn" id="create-wl-btn">+ New List</button>
+        <div class="panel-content research-context">
+          <div class="context-card">
+            <div class="context-card-heading">
+              <span class="section-kicker">Notes</span>
+            </div>
+            <div class="selected-summary-compact">
+              <div class="selected-overview-title">
+                <h3 id="selected-symbol">SPY</h3>
+                <span id="selected-session" class="session-pill">Market closed</span>
+              </div>
+              <div class="selected-overview-price">
+                <span id="selected-last" class="selected-chart-last">--</span>
+                <span id="selected-change" class="selected-change">--</span>
+              </div>
+            </div>
+            <p id="selected-note-preview" class="note-preview">No note saved for this symbol yet.</p>
+            <button class="secondary-btn" id="edit-selected-note">Edit Note</button>
+          </div>
+          <div class="context-card">
+            <div class="context-card-heading">
+              <span class="section-kicker">News</span>
+            </div>
+            <div id="selected-news-list" class="news-list"></div>
+          </div>
+          <div class="context-card">
+            <div class="context-card-heading">
+              <span class="section-kicker">Related Symbols</span>
+            </div>
+            <div id="related-symbol-list" class="related-symbol-list"></div>
+          </div>
         </div>
       </section>
 
       <section class="panel positions-panel">
         <div class="panel-header">
           <h2>Positions</h2>
-          <button class="refresh-btn" id="refresh-positions">Refresh</button>
+          <div class="panel-actions">
+            <button class="refresh-btn" id="refresh-positions">Refresh</button>
+            <button class="close-all-btn" id="close-all-positions">Close All</button>
+          </div>
         </div>
         <div class="panel-content">
           <table class="data-table positions-table">
@@ -200,39 +280,158 @@
         </div>
       </section>
 
-      <section class="panel activities-panel">
+      <section class="panel risk-journal-panel">
         <div class="panel-header">
-          <h2>Recent Activities</h2>
+          <h2>Risk & Journal</h2>
           <div class="panel-actions">
-            <select id="activity-type-filter" class="activity-filter">
-              <option value="">All Types</option>
-              <option value="fill">Trades</option>
-              <option value="dividend">Dividends</option>
-              <option value="fee">Fees</option>
-              <option value="interest">Interest</option>
-            </select>
-            <button class="refresh-btn" id="refresh-activities">Refresh</button>
+            <button class="refresh-btn" id="refresh-risk">Refresh</button>
+            <button class="refresh-btn" id="clear-journal">Clear Journal</button>
           </div>
         </div>
-        <div class="panel-content">
-          <table class="data-table activities-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Amount</th>
-              </tr>
-            </thead>
-            <tbody id="activities-body">
-              <tr class="empty-row">
-                <td colspan="7">No recent activities</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="panel-content risk-journal-content">
+          <div class="risk-summary-grid">
+            <article class="risk-summary-card posture-card">
+              <span class="risk-summary-label">Risk posture</span>
+              <strong id="risk-posture" class="risk-posture badge posture-balanced">Balanced</strong>
+              <span id="risk-score" class="risk-score">0/100</span>
+              <div class="risk-bar">
+                <div id="risk-bar-fill" class="risk-bar-fill"></div>
+              </div>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Equity</span>
+              <strong id="risk-equity" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Gross exposure</span>
+              <strong id="risk-gross" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Net exposure</span>
+              <strong id="risk-net" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Largest position</span>
+              <strong id="risk-largest" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Open order risk</span>
+              <strong id="risk-open-orders" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Cash buffer</span>
+              <strong id="risk-cash" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Unrealized P&L</span>
+              <strong id="risk-unrealized" class="risk-metric-value">--</strong>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Day P&L</span>
+              <strong id="risk-day-pnl" class="risk-metric-value">--</strong>
+              <small id="risk-day-change" class="risk-metric-subtle">--</small>
+              <small id="risk-day-change-pct" class="risk-metric-subtle">--</small>
+            </article>
+            <article class="risk-summary-card">
+              <span class="risk-summary-label">Active counts</span>
+              <div class="risk-count-row">
+                <span><strong id="risk-position-count">0</strong> pos</span>
+                <span><strong id="risk-order-count">0</strong> orders</span>
+                <span><strong id="risk-alert-count">0</strong> alerts</span>
+                <span><strong id="risk-journal-count">0</strong> notes</span>
+              </div>
+            </article>
+          </div>
+
+          <div class="risk-journal-grid">
+            <section class="journal-panel">
+              <div class="section-heading">
+                <h3>Journal Entry</h3>
+                <button class="secondary-btn" id="use-selected-symbol">Use Selected</button>
+              </div>
+              <form id="journal-form" class="journal-form">
+                <div class="journal-form-row">
+                  <label for="journal-symbol">Symbol</label>
+                  <input type="text" id="journal-symbol" placeholder="AAPL" maxlength="5" required>
+                </div>
+                <div class="journal-form-row journal-inline">
+                  <div>
+                    <label for="journal-stance">Stance</label>
+                    <select id="journal-stance">
+                      <option value="Bullish">Bullish</option>
+                      <option value="Bearish">Bearish</option>
+                      <option value="Neutral" selected>Neutral</option>
+                      <option value="Caution">Caution</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="journal-stage">Stage</label>
+                    <select id="journal-stage">
+                      <option value="Idea">Idea</option>
+                      <option value="Watchlist">Watchlist</option>
+                      <option value="Planned">Planned</option>
+                      <option value="Entered">Entered</option>
+                      <option value="Exited">Exited</option>
+                      <option value="Review" selected>Review</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="journal-form-row">
+                  <label for="journal-title">Title</label>
+                  <input type="text" id="journal-title" placeholder="Trade thesis or setup title" maxlength="80">
+                </div>
+                <div class="journal-form-row">
+                  <label for="journal-note">Notes</label>
+                  <textarea id="journal-note" placeholder="Write the setup, plan, and post-trade review..." rows="6"></textarea>
+                </div>
+                <div class="journal-actions">
+                  <button type="submit" class="submit-btn">Save Entry</button>
+                </div>
+              </form>
+
+              <div class="section-heading journal-list-heading">
+                <h3>Saved Entries</h3>
+                <span id="journal-count" class="journal-count">0 entries</span>
+              </div>
+              <div id="journal-list" class="journal-list"></div>
+            </section>
+
+            <section class="activity-panel">
+              <div class="panel-header activity-panel-header">
+                <h3>Recent Activities</h3>
+                <div class="panel-actions">
+                  <select id="activity-type-filter" class="activity-filter">
+                    <option value="">All Types</option>
+                    <option value="fill">Trades</option>
+                    <option value="dividend">Dividends</option>
+                    <option value="fee">Fees</option>
+                    <option value="interest">Interest</option>
+                  </select>
+                  <button class="refresh-btn" id="refresh-activities">Refresh</button>
+                </div>
+              </div>
+              <div class="activity-panel-body">
+                <table class="data-table activities-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Qty</th>
+                      <th>Price</th>
+                      <th>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody id="activities-body">
+                    <tr class="empty-row">
+                      <td colspan="7">No recent activities</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
         </div>
       </section>
 
@@ -241,6 +440,37 @@
           <h2>Place Order</h2>
         </div>
         <div class="panel-content">
+          <div class="order-summary-strip">
+            <div class="order-summary-chip">
+              <span>Selected</span>
+              <strong id="exec-order-symbol">SPY</strong>
+            </div>
+            <div class="order-summary-chip">
+              <span>Last</span>
+              <strong id="exec-order-last">--</strong>
+            </div>
+            <div class="order-summary-chip">
+              <span>Buying Power</span>
+              <strong id="exec-buying-power">--</strong>
+            </div>
+            <div class="order-summary-chip">
+              <span>Active Orders</span>
+              <strong id="exec-active-orders">--</strong>
+            </div>
+            <div class="order-summary-chip">
+              <span>Session</span>
+              <strong id="exec-session">--</strong>
+            </div>
+          </div>
+
+          <div class="order-quick-actions">
+            <button type="button" class="order-quick-btn" data-exec-action="use-selected">Use Selected</button>
+            <button type="button" class="order-quick-btn" data-exec-action="buy-market">Buy Mkt</button>
+            <button type="button" class="order-quick-btn" data-exec-action="sell-market">Sell Mkt</button>
+            <button type="button" class="order-quick-btn" data-exec-action="buy-bracket">Bracket Long</button>
+            <button type="button" class="order-quick-btn" data-exec-action="sell-stop">Protect Exit</button>
+          </div>
+
           <form id="order-form" class="order-form">
             <div class="form-row">
               <label>Symbol</label>
@@ -258,7 +488,22 @@
                 <option value="stop">Stop</option>
                 <option value="stop_limit">Stop Limit</option>
                 <option value="trailing_stop">Trailing Stop</option>
-                <option value="take_profit">Take Profit</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Order Class</label>
+              <select id="order-class">
+                <option value="simple" selected>Simple</option>
+                <option value="bracket">Bracket</option>
+                <option value="oco">OCO</option>
+              </select>
+              <small class="field-hint">Bracket and OCO add attached take-profit and stop-loss legs.</small>
+            </div>
+            <div class="form-row">
+              <label>Order Mode</label>
+              <select id="order-mode">
+                <option value="qty" selected>Quantity</option>
+                <option value="notional">Notional</option>
               </select>
             </div>
             <div class="form-row limit-price-row hidden">
@@ -275,7 +520,19 @@
             </div>
             <div class="form-row">
               <label>Quantity</label>
-              <input type="number" id="order-qty" min="1" value="1" required>
+              <input type="number" id="order-qty" min="0.001" step="any" value="1" required>
+            </div>
+            <div class="form-row hidden" id="notional-row">
+              <label>Notional</label>
+              <input type="number" id="order-notional" step="0.01" min="0" placeholder="1000.00">
+            </div>
+            <div class="form-row hidden" id="take-profit-row">
+              <label>Take Profit</label>
+              <input type="number" id="take-profit-price" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-row hidden" id="stop-loss-row">
+              <label>Stop Loss</label>
+              <input type="number" id="stop-loss-price" step="0.01" min="0" placeholder="0.00">
             </div>
             <div class="form-row">
               <label>Time in Force</label>
@@ -285,6 +542,24 @@
                 <option value="ioc">IOC</option>
                 <option value="fok">FOK</option>
               </select>
+            </div>
+            <div class="form-row exec-options-row">
+              <label class="checkbox-option">
+                <input type="checkbox" id="extended-hours">
+                <span>Extended hours</span>
+              </label>
+              <label class="checkbox-option">
+                <input type="checkbox" id="reduce-only">
+                <span>Reduce only</span>
+              </label>
+            </div>
+            <div class="preset-row">
+              <button type="button" class="preset-btn" data-preset="10">10</button>
+              <button type="button" class="preset-btn" data-preset="25">25</button>
+              <button type="button" class="preset-btn" data-preset="50">50</button>
+              <button type="button" class="preset-btn" data-preset="100">100</button>
+              <button type="button" class="preset-btn" data-preset="notional-1">1% BP</button>
+              <button type="button" class="preset-btn" data-preset="notional-5">5% BP</button>
             </div>
             <div class="order-preview">
               <div class="preview-row">
