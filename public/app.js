@@ -85,6 +85,13 @@ let state = {
   loadingMore: false,
   chartRequestId: 0,
   symbolRequestId: 0,
+  accountRequestId: 0,
+  positionsRequestId: 0,
+  ordersRequestId: 0,
+  activitiesRequestId: 0,
+  snapshotsRequestId: 0,
+  clockRequestId: 0,
+  moversRequestId: 0,
   chartDataStart: null,
   chartDataEnd: null,
   rawBars: [],
@@ -587,7 +594,7 @@ const renderAlerts = () => {
 const api = {
   get: async (url) => {
     console.log('[API] GET', url);
-    const response = await fetch(url);
+    const response = await fetch(url, { cache: 'no-store' });
     const data = await response.json();
     console.log('[API] Response:', data);
     return data;
@@ -597,6 +604,7 @@ const api = {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify(body)
     });
     const data = await response.json();
@@ -605,7 +613,7 @@ const api = {
   },
   delete: async (url) => {
     console.log('[API] DELETE', url);
-    const response = await fetch(url, { method: 'DELETE' });
+    const response = await fetch(url, { method: 'DELETE', cache: 'no-store' });
     const data = await response.json();
     console.log('[API] Response:', data);
     return data;
@@ -615,6 +623,7 @@ const api = {
     const response = await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify(body)
     });
     const data = await response.json();
@@ -624,8 +633,10 @@ const api = {
 };
 
 const loadAccount = async () => {
+  const requestId = ++state.accountRequestId;
   try {
     const result = await api.get('/api/account');
+    if (requestId !== state.accountRequestId) return;
     if (result.success) {
       state.account = result.data;
       renderAccount();
@@ -637,8 +648,10 @@ const loadAccount = async () => {
 };
 
 const loadPositions = async () => {
+  const requestId = ++state.positionsRequestId;
   try {
     const result = await api.get('/api/positions');
+    if (requestId !== state.positionsRequestId) return;
     if (result.success) {
       state.positions = result.data || [];
       console.log('[API] Loaded', state.positions.length, 'positions');
@@ -651,8 +664,10 @@ const loadPositions = async () => {
 };
 
 const loadOrders = async () => {
+  const requestId = ++state.ordersRequestId;
   try {
     const result = await api.get('/api/orders?status=all&limit=20');
+    if (requestId !== state.ordersRequestId) return;
     if (result.success) {
       state.orders = result.data || [];
       console.log('[API] Loaded', state.orders.length, 'orders');
@@ -665,10 +680,12 @@ const loadOrders = async () => {
 };
 
 const loadActivities = async (type = null) => {
+  const requestId = ++state.activitiesRequestId;
   try {
     let url = '/api/activities?page_size=50';
     if (type) url += `&type=${type}`;
     const result = await api.get(url);
+    if (requestId !== state.activitiesRequestId) return;
     if (result.success) {
       state.activities = result.data || [];
       console.log('[API] Loaded', state.activities.length, 'activities');
@@ -725,9 +742,12 @@ const loadAccountDetails = async () => {
 };
 
 const loadSnapshots = async () => {
+  const requestId = ++state.snapshotsRequestId;
   try {
     const symbols = state.watchlist.join(',');
+    if (!symbols) return;
     const result = await api.get(`/api/market/snapshots?symbols=${symbols}`);
+    if (requestId !== state.snapshotsRequestId) return;
     if (result.success && result.data) {
       console.log('[API] Loaded snapshots for', Object.keys(result.data).length, 'symbols');
       
@@ -847,8 +867,10 @@ const renderAccountDetails = () => {
 };
 
 const loadClock = async () => {
+  const requestId = ++state.clockRequestId;
   try {
     const result = await api.get('/api/market/clock');
+    if (requestId !== state.clockRequestId) return;
     if (result.success) {
       state.clock = result.data;
       renderClock();
@@ -876,8 +898,10 @@ const loadPortfolioHistory = async () => {
 };
 
 const loadMovers = async () => {
+  const requestId = ++state.moversRequestId;
   try {
     const result = await api.get('/api/market/movers?market_type=stocks&top=10');
+    if (requestId !== state.moversRequestId) return;
     if (result.success && result.data) {
       const payload = result.data;
       const gainers = payload.gainers || payload.top_gainers || payload.winners || payload.data?.gainers || [];
@@ -896,12 +920,15 @@ const loadMovers = async () => {
   }
 };
 
-const loadSelectedSymbolResearch = async (symbol) => {
+const loadSelectedSymbolResearch = async (symbol, options = {}) => {
   const selected = normalizeResearchSymbol(symbol);
+  const { clearWhileLoading = true } = options;
   const requestId = ++state.symbolRequestId;
-  state.selectedSnapshot = null;
-  state.selectedNews = [];
   state.selectedPeers = buildComparePeers(selected);
+  if (clearWhileLoading) {
+    state.selectedSnapshot = null;
+    state.selectedNews = [];
+  }
   renderResearchSidebar();
 
   try {
@@ -3158,6 +3185,24 @@ const renderResearchSidebar = () => {
   renderRelatedSymbols();
 };
 
+const refreshLiveData = async ({ includeResearch = false } = {}) => {
+  const jobs = [
+    loadClock(),
+    loadAccount(),
+    loadPositions(),
+    loadOrders(),
+    loadActivities(document.getElementById('activity-type-filter')?.value || null),
+    loadSnapshots(),
+    loadMovers()
+  ];
+
+  if (includeResearch) {
+    jobs.push(loadSelectedSymbolResearch(state.currentSymbol, { clearWhileLoading: false }));
+  }
+
+  await Promise.allSettled(jobs);
+};
+
 const render = async () => {
   console.log('[App] Initializing dashboard...');
   await Promise.all([loadAccount(), loadPositions(), loadOrders(), loadClock()]);
@@ -3823,8 +3868,7 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
 
   document.getElementById('refresh-radar').addEventListener('click', () => {
-    loadMovers();
-    loadSelectedSymbolResearch(state.currentSymbol);
+    refreshLiveData({ includeResearch: true });
   });
 
   document.getElementById('scanner-search').addEventListener('input', (e) => {
@@ -3914,24 +3958,6 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
     renderRiskJournal();
   });
 
-  // Sample Dashboard video button
-  const videoModal = document.getElementById('video-modal');
-  const videoFrame = document.getElementById('video-frame');
-  document.getElementById('sample-dashboard-btn').addEventListener('click', () => {
-    videoFrame.src = 'https://www.youtube.com/embed/gebtJAsMioo?autoplay=1';
-    videoModal.classList.remove('hidden');
-  });
-  document.getElementById('close-video-modal').addEventListener('click', () => {
-    videoFrame.src = '';
-    videoModal.classList.add('hidden');
-  });
-  videoModal.addEventListener('click', (e) => {
-    if (e.target.id === 'video-modal') {
-      videoFrame.src = '';
-      videoModal.classList.add('hidden');
-    }
-  });
-
   // Keyboard shortcuts modal
   document.getElementById('close-shortcuts-modal').addEventListener('click', closeShortcutsModal);
   document.getElementById('shortcuts-modal').addEventListener('click', (e) => {
@@ -4015,11 +4041,29 @@ const init = async () => {
   renderRiskJournal(true);
   await render();
   
-  setInterval(loadPositions, 10000);
-  setInterval(loadOrders, 5000);
-  setInterval(loadAccount, 15000);
-  setInterval(loadActivities, 60000); // Refresh activities every minute
-  setInterval(loadMovers, 60000); // Refresh scanner context every minute
+  const refreshIntervals = [
+    setInterval(loadClock, 15000),
+    setInterval(loadAccount, 10000),
+    setInterval(loadPositions, 10000),
+    setInterval(loadOrders, 5000),
+    setInterval(() => loadActivities(document.getElementById('activity-type-filter')?.value || null), 60000),
+    setInterval(loadSnapshots, 10000),
+    setInterval(loadMovers, 60000),
+    setInterval(() => loadSelectedSymbolResearch(state.currentSymbol, { clearWhileLoading: false }), 20000)
+  ];
+
+  const forceRefresh = () => {
+    refreshLiveData({ includeResearch: true });
+  };
+
+  window.addEventListener('focus', forceRefresh);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      forceRefresh();
+    }
+  });
+  window.addEventListener('online', forceRefresh);
+  window.refreshIntervals = refreshIntervals;
 };
 
 document.addEventListener('DOMContentLoaded', init);
@@ -4098,11 +4142,7 @@ const initKeyboardShortcuts = () => {
     if (e.key === 'r' || e.key === 'R') {
       if (e.shiftKey) {
         // Refresh all
-        loadPositions();
-        loadOrders();
-        loadAccount();
-        loadActivities();
-        loadSnapshots();
+        refreshLiveData({ includeResearch: true });
       } else {
         loadPositions();
       }
