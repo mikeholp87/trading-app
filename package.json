@@ -8,7 +8,8 @@
     "dev": "nodemon server.js",
     "electron": "electron electron/main.js",
     "electron:dev": "electron electron/main.js --dev",
-    "build": "electron-builder",
+    "build": "node scripts/build.cjs",
+    "build:desktop": "electron-builder",
     "build:linux": "electron-builder --linux",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac"
