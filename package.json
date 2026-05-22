@@ -8,15 +8,22 @@
     "dev": "nodemon server.js",
     "electron": "electron electron/main.js",
     "electron:dev": "electron electron/main.js --dev",
+    "generate:icons": "node scripts/generate-icons.cjs",
+    "test": "vitest run",
+    "check:icons": "npm run generate:icons && git diff --exit-code -- assets/icon.png assets/icon.ico",
+    "build:ci": "npm run generate:icons && electron-builder --dir --publish never",
+    "check:all": "npm test && npm run check:icons && npm run build:ci",
+    "postinstall": "node scripts/install-hooks.cjs",
     "build": "node scripts/build.cjs",
-    "build:desktop": "electron-builder",
-    "build:linux": "electron-builder --linux",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac"
+    "build:desktop": "npm run generate:icons && electron-builder",
+    "build:linux": "npm run generate:icons && electron-builder --linux",
+    "build:win": "npm run generate:icons && electron-builder --win",
+    "build:mac": "npm run generate:icons && electron-builder --mac"
   },
   "build": {
     "appId": "com.alpaca.trading-dashboard",
     "productName": "Alpaca Trading Dashboard",
+    "icon": "assets/icon.png",
     "directories": {
       "output": "dist"
     },
@@ -27,15 +34,24 @@
       ".env",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "assets/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "linux": {
       "target": ["AppImage"],
-      "category": "Finance"
+      "category": "Finance",
+      "icon": "assets/icon.png"
     },
     "win": {
-      "target": ["nsis"]
+      "target": ["nsis"],
+      "icon": "assets/icon.ico"
     },
     "mac": {
-      "target": ["dmg"]
+      "target": ["dmg"],
+      "icon": "assets/icon.png"
     }
   },
   "repository": {

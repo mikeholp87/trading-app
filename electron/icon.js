@@ -1,0 +1,54 @@
+const { app, nativeImage } = require('electron');
+const fs = require('fs');
+const path = require('path');
+
+const FALLBACK_SVG = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#10192c"/>
+        <stop offset="100%" stop-color="#172840"/>
+      </linearGradient>
+      <radialGradient id="glow" cx="50%" cy="40%" r="65%">
+        <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.24"/>
+        <stop offset="60%" stop-color="#2ecc71" stop-opacity="0.08"/>
+        <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect x="1" y="1" width="62" height="62" rx="18" fill="url(#bg)"/>
+    <rect x="1" y="1" width="62" height="62" rx="18" fill="url(#glow)"/>
+    <rect x="2.5" y="2.5" width="59" height="59" rx="16" fill="none" stroke="#2ecc71" stroke-width="2" opacity="0.55"/>
+    <g fill="#2ecc71">
+      <rect x="29.5" y="11" width="5" height="42" rx="2.5"/>
+      <path d="M31.8 10.5c8.8 0 14.8 4 14.8 10.4 0 4.8-2.8 8.1-8.2 10.1 6 1.8 9.1 5.2 9.1 10 0 7-6.5 11.4-15.7 11.4-5.2 0-10.1-1.4-13.6-4l3.8-5.6c2.6 2 6 3.1 9.8 3.1 4.3 0 7-1.9 7-4.9 0-3.1-2.8-4.8-8.4-4.8h-3.3v-5.8h3.1c5.3 0 8-2 8-5.1 0-2.8-2.6-4.7-7.1-4.7-3.3 0-6.5 1-9 2.9l-3.3-5.3c3.3-2.8 8.1-4.7 13-4.7z"/>
+    </g>
+  </svg>
+`;
+
+const getIconCandidates = () => {
+  const packagedIcon = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '..', 'assets', 'icon.png');
+
+  return [
+    packagedIcon,
+    path.join(process.resourcesPath, 'build', 'icon.png')
+  ];
+};
+
+const createAppIcon = () => {
+  for (const candidate of getIconCandidates()) {
+    if (fs.existsSync(candidate)) {
+      return nativeImage.createFromPath(candidate);
+    }
+  }
+
+  return nativeImage.createFromDataURL(
+    `data:image/svg+xml;charset=utf-8,${encodeURIComponent(FALLBACK_SVG)}`
+  );
+};
+
+module.exports = {
+  createAppIcon,
+  getIconCandidates
+};

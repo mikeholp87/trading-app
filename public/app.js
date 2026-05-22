@@ -27,6 +27,8 @@ const showToast = (msg, type = 'info', duration = 4000) => {
   if (duration > 0) setTimeout(() => { if (toast.parentNode) { toast.classList.add('toast-out'); setTimeout(() => toast.remove(), 250); } }, duration);
 };
 
+const DESKTOP_UI_STATE_KEY = 'desktop-ui-state';
+
 let state = {
   account: null,
   positions: [],
@@ -99,6 +101,8 @@ let state = {
   selectedNews: [],
   selectedPeers: [],
   portfolioHistory: null,
+  chartResizeObserver: null,
+  chartInitialFitPending: false,
   marketMovers: {
     gainers: [],
     losers: []
@@ -112,6 +116,73 @@ let state = {
   dailyPnL: 0,
   realizedPnL: 0
 };
+
+const loadDesktopUiState = () => {
+  try {
+    return JSON.parse(localStorage.getItem(DESKTOP_UI_STATE_KEY) || '{}');
+  } catch (error) {
+    return {};
+  }
+};
+
+const saveDesktopUiState = () => {
+  const grid = document.querySelector('.dashboard-grid');
+
+  const uiState = {
+    currentSymbol: state.currentSymbol,
+    timeframe: state.timeframe,
+    chartType: state.chartType,
+    scannerFilter: state.scannerFilter,
+    scannerQuery: state.scannerQuery,
+    activeWatchlist: state.activeWatchlist,
+    layout: grid ? {
+      col1: grid.style.getPropertyValue('--dashboard-col-1') || '',
+      col2: grid.style.getPropertyValue('--dashboard-col-2') || '',
+      col3: grid.style.getPropertyValue('--dashboard-col-3') || '',
+      row2: grid.style.getPropertyValue('--dashboard-row-2') || ''
+    } : null
+  };
+
+  localStorage.setItem(DESKTOP_UI_STATE_KEY, JSON.stringify(uiState));
+};
+
+const scheduleDesktopUiStateSave = debounce(saveDesktopUiState, 150);
+
+const applyDesktopLayoutState = (layout) => {
+  const grid = document.querySelector('.dashboard-grid');
+  if (!grid || !layout) return;
+
+  if (layout.col1) grid.style.setProperty('--dashboard-col-1', layout.col1);
+  if (layout.col2) grid.style.setProperty('--dashboard-col-2', layout.col2);
+  if (layout.col3) grid.style.setProperty('--dashboard-col-3', layout.col3);
+  if (layout.row2) grid.style.setProperty('--dashboard-row-2', layout.row2);
+};
+
+const syncDesktopUiFromState = () => {
+  const chartSymbolInput = document.getElementById('chart-symbol');
+  const watchlistInput = document.getElementById('watchlist-add');
+  const scannerSearchInput = document.getElementById('scanner-search');
+
+  if (chartSymbolInput) chartSymbolInput.value = state.currentSymbol;
+  if (watchlistInput) watchlistInput.value = '';
+  if (scannerSearchInput) scannerSearchInput.value = state.scannerQuery || '';
+
+  document.querySelectorAll('.tf-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tf === state.timeframe);
+  });
+
+  document.querySelectorAll('.ct-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.ct === state.chartType);
+  });
+
+  document.querySelectorAll('.scanner-filter').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.filter === state.scannerFilter);
+  });
+};
+
+const isValidTimeframe = (value) => ['1D', '5D', '1M', '3M', '1Y'].includes(value);
+const isValidChartType = (value) => ['candle', 'line', 'area', 'bar'].includes(value);
+const isValidScannerFilter = (value) => ['gainers', 'losers', 'volume', 'positions', 'watchlist'].includes(value);
 
 const formatMoney = (value) => {
   const num = parseFloat(value);
@@ -989,6 +1060,7 @@ const selectSymbol = (symbol, options = {}) => {
   renderWatchlist();
   renderResearchSidebar();
   renderExecutionSummary();
+  scheduleDesktopUiStateSave();
 };
 
 const renderEquityChart = (data) => {
@@ -1103,6 +1175,28 @@ const appendHistoricalBars = (existingBars, incomingBars) => {
   return mergeAndSortBars([...existingBars, ...filtered]);
 };
 
+const syncChartToContainer = ({ fitContent = false } = {}) => {
+  const container = document.getElementById('chart-container');
+  if (!state.chart || !container) return;
+
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  if (!width || !height) return;
+
+  state.chart.applyOptions({
+    width,
+    height
+  });
+
+  if (fitContent) {
+    requestAnimationFrame(() => {
+      if (state.chart) {
+        state.chart.timeScale().fitContent();
+      }
+    });
+  }
+};
+
 const initChart = () => {
   const container = document.getElementById('chart-container');
   
@@ -1186,21 +1280,32 @@ const initChart = () => {
     state.indicators.atr = false;
     state.indicators.stochastic = false;
     state.indicators.vwap = false;
+    state.chartInitialFitPending = true;
 
     // Create series based on current chart type
     createSeriesForType(state.chartType);
 
     // Proper resize handler using ResizeObserver
+    if (state.chartResizeObserver) {
+      state.chartResizeObserver.disconnect();
+      state.chartResizeObserver = null;
+    }
+
     const resizeObserver = new ResizeObserver(() => {
-      if (state.chart && container.clientWidth > 0 && container.clientHeight > 0) {
-        state.chart.applyOptions({
-          width: container.clientWidth,
-          height: container.clientHeight
-        });
+      if (!state.chart || container.clientWidth <= 0 || container.clientHeight <= 0) return;
+      syncChartToContainer({
+        fitContent: state.chartInitialFitPending && state.rawBars.length > 0
+      });
+
+      if (state.chartInitialFitPending && state.rawBars.length > 0) {
+        state.chartInitialFitPending = false;
       }
     });
     
     resizeObserver.observe(container);
+    state.chartResizeObserver = resizeObserver;
+
+    syncChartToContainer();
 
     // Subscribe to visible range changes for auto-loading more data
     state.chart.timeScale().subscribeVisibleLogicalRangeChange((newRange) => {
@@ -1348,7 +1453,8 @@ const switchChartType = async (newType) => {
   // Re-apply indicator data
   updateIndicatorData();
 
-  state.chart.timeScale().fitContent();
+  syncChartToContainer({ fitContent: true });
+  scheduleDesktopUiStateSave();
   console.log('[Chart] Switched to', newType);
 };
 
@@ -1380,22 +1486,19 @@ const updateChart = (bars, timeframe) => {
   // Update indicator data
   updateIndicatorData();
 
-  state.chart.timeScale().fitContent();
+  syncChartToContainer({ fitContent: true });
 
   // Track data bounds for infinite scroll
   state.chartDataStart = bars.length > 0 ? bars[0].time : null;
   state.chartDataEnd = bars.length > 0 ? bars[bars.length - 1].time : null;
   state.loadedEarliest = false;
+  state.chartInitialFitPending = false;
 
   // Force resize after data load
   const container = document.getElementById('chart-container');
   setTimeout(() => {
-    if (state.chart && container.clientWidth > 0 && container.clientHeight > 0) {
-      state.chart.applyOptions({
-        width: container.clientWidth,
-        height: container.clientHeight
-      });
-      state.chart.timeScale().fitContent();
+    if (state.chart) {
+      syncChartToContainer({ fitContent: true });
     }
   }, 50);
   
@@ -1617,12 +1720,16 @@ const initResizable = () => {
       
       // Find which column we're in and adjust
       newWidths[2] = Math.max(200, Math.min(500, startColWidths[2] + delta));
-      grid.style.gridTemplateColumns = `${newWidths[0]}px 1fr ${newWidths[2]}px`;
+      grid.style.setProperty('--dashboard-col-1', `${newWidths[0]}px`);
+      grid.style.setProperty('--dashboard-col-2', '1fr');
+      grid.style.setProperty('--dashboard-col-3', `${newWidths[2]}px`);
+      scheduleDesktopUiStateSave();
     } else if (resizeType === 'row') {
       const delta = clientPos - startPos;
       const newHeights = [...startRowHeights];
       newHeights[1] = Math.max(200, startRowHeights[1] + delta);
-      grid.style.gridTemplateRows = `minmax(120px, auto) minmax(${newHeights[1]}px, 1fr) minmax(120px, auto)`;
+      grid.style.setProperty('--dashboard-row-2', `minmax(${newHeights[1]}px, 1fr)`);
+      scheduleDesktopUiStateSave();
     }
   };
   
@@ -1637,6 +1744,117 @@ const initResizable = () => {
     resizeType = null;
     document.body.style.cursor = '';
   });
+};
+
+const PANEL_COLLAPSE_STORAGE_KEY = 'dashboard-panel-collapse-state';
+const DASHBOARD_COLLAPSED_ROW_MIN_HEIGHT = 56;
+const DASHBOARD_ROW_MIN_HEIGHTS = {
+  3: 160,
+  4: 160,
+  5: 260,
+  6: 160
+};
+
+const getPanelStorageKey = (panel) => {
+  const panelClass = Array.from(panel.classList).find(cls => cls.endsWith('-panel') && cls !== 'panel');
+  return panelClass || panel.id || null;
+};
+
+const loadPanelCollapseState = () => {
+  try {
+    return JSON.parse(localStorage.getItem(PANEL_COLLAPSE_STORAGE_KEY) || '{}');
+  } catch (error) {
+    return {};
+  }
+};
+
+const savePanelCollapseState = (collapseState) => {
+  localStorage.setItem(PANEL_COLLAPSE_STORAGE_KEY, JSON.stringify(collapseState));
+};
+
+const syncDashboardRowHeights = () => {
+  const grid = document.querySelector('.dashboard-grid');
+  if (!grid) return;
+
+  const rowPanels = {
+    3: '.positions-panel',
+    4: '.orders-panel',
+    5: '.risk-journal-panel',
+    6: '.alerts-panel'
+  };
+
+  Object.entries(rowPanels).forEach(([rowIndex, selector]) => {
+    const panel = document.querySelector(selector);
+    const isCollapsed = panel?.classList.contains('panel--collapsed');
+    const rowHeight = isCollapsed ? DASHBOARD_COLLAPSED_ROW_MIN_HEIGHT : DASHBOARD_ROW_MIN_HEIGHTS[rowIndex];
+    grid.style.setProperty(`--dashboard-row-${rowIndex}`, `minmax(${rowHeight}px, auto)`);
+  });
+};
+
+const updateCollapseButton = (button, collapsed) => {
+  if (!button) return;
+  button.textContent = collapsed ? '+' : '−';
+  button.title = collapsed ? 'Expand section' : 'Collapse section';
+  button.setAttribute('aria-expanded', String(!collapsed));
+  button.setAttribute('aria-label', collapsed ? 'Expand section' : 'Collapse section');
+};
+
+const setPanelCollapsed = (panel, collapsed, { persist = true } = {}) => {
+  const panelKey = getPanelStorageKey(panel);
+  panel.classList.toggle('panel--collapsed', collapsed);
+
+  const button = panel.querySelector('.panel-collapse-btn');
+  updateCollapseButton(button, collapsed);
+
+  if (persist && panelKey) {
+    const collapseState = loadPanelCollapseState();
+    collapseState[panelKey] = collapsed;
+    savePanelCollapseState(collapseState);
+  }
+
+  syncDashboardRowHeights();
+  scheduleDesktopUiStateSave();
+  window.requestAnimationFrame(() => {
+    window.dispatchEvent(new Event('resize'));
+  });
+};
+
+const initPanelCollapseControls = () => {
+  const collapseState = loadPanelCollapseState();
+
+  document.querySelectorAll('.panel').forEach(panel => {
+    const header = panel.querySelector(':scope > .panel-header');
+    if (!header) return;
+
+    const firstContent = header.firstElementChild;
+    if (!firstContent) return;
+
+    let headerPrimary = header.querySelector('.panel-header-primary');
+    if (!headerPrimary) {
+      headerPrimary = document.createElement('div');
+      headerPrimary.className = 'panel-header-primary';
+      header.insertBefore(headerPrimary, firstContent);
+      headerPrimary.appendChild(firstContent);
+    }
+
+    let collapseButton = header.querySelector('.panel-collapse-btn');
+    if (!collapseButton) {
+      collapseButton = document.createElement('button');
+      collapseButton.type = 'button';
+      collapseButton.className = 'panel-collapse-btn';
+      collapseButton.addEventListener('click', () => {
+        setPanelCollapsed(panel, !panel.classList.contains('panel--collapsed'));
+      });
+      headerPrimary.appendChild(collapseButton);
+    }
+
+    const panelKey = getPanelStorageKey(panel);
+    const shouldCollapse = panelKey ? Boolean(collapseState[panelKey]) : false;
+    updateCollapseButton(collapseButton, shouldCollapse);
+    panel.classList.toggle('panel--collapsed', shouldCollapse);
+  });
+
+  syncDashboardRowHeights();
 };
 
 const calculateEMA = (prices, period) => {
@@ -3313,6 +3531,7 @@ const switchWatchlist = (name) => {
   renderWatchlist();
   renderScanner();
   renderResearchSidebar();
+  scheduleDesktopUiStateSave();
 
   // Lazy-load: only fetch snapshots if this tab hasn't been loaded yet
   if (!state.alertedTabs[name]) {
@@ -3414,6 +3633,7 @@ const bindEvents = () => {
       console.log('[UI] Symbol changed to:', symbol);
       state.currentSymbol = symbol;
       loadChart(symbol, state.timeframe);
+      scheduleDesktopUiStateSave();
     }
   });
   
@@ -3424,6 +3644,7 @@ const bindEvents = () => {
         console.log('[UI] Symbol entered:', symbol);
         state.currentSymbol = symbol;
         loadChart(symbol, state.timeframe);
+        scheduleDesktopUiStateSave();
       }
     }
   });
@@ -3874,6 +4095,7 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
   document.getElementById('scanner-search').addEventListener('input', (e) => {
     state.scannerQuery = e.target.value.toUpperCase();
     renderScanner();
+    scheduleDesktopUiStateSave();
   });
 
   document.querySelectorAll('.scanner-filter').forEach((btn) => {
@@ -3883,6 +4105,7 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
       document.querySelectorAll('.scanner-filter').forEach((b) => b.classList.remove('active'));
       e.target.classList.add('active');
       renderScanner();
+      scheduleDesktopUiStateSave();
     });
   });
 
@@ -4001,6 +4224,8 @@ document.getElementById('add-symbol-btn').addEventListener('click', addToWatchli
 };
 
 const init = async () => {
+  const savedDesktopUiState = loadDesktopUiState();
+
   // Load watchlists from localStorage
   const savedWatchlists = localStorage.getItem('watchlists');
   if (savedWatchlists) {
@@ -4016,12 +4241,34 @@ const init = async () => {
   // Load active watchlist name
   const savedActive = localStorage.getItem('activeWatchlist');
   state.activeWatchlist = savedActive || 'Default';
+
+  if (savedDesktopUiState.activeWatchlist && state.watchlists[savedDesktopUiState.activeWatchlist]) {
+    state.activeWatchlist = savedDesktopUiState.activeWatchlist;
+    localStorage.setItem('activeWatchlist', state.activeWatchlist);
+  }
   
   // Set current watchlist symbols from active watchlist
   state.watchlist = state.watchlists[state.activeWatchlist] || [];
   state.journalEntries = state.journalEntries.map(normalizeJournalEntry).filter(Boolean);
   saveJournalEntries();
-  
+
+  if (savedDesktopUiState.currentSymbol) {
+    state.currentSymbol = normalizeResearchSymbol(savedDesktopUiState.currentSymbol) || state.currentSymbol;
+  }
+  if (isValidTimeframe(savedDesktopUiState.timeframe)) {
+    state.timeframe = savedDesktopUiState.timeframe;
+  }
+  if (isValidChartType(savedDesktopUiState.chartType)) {
+    state.chartType = savedDesktopUiState.chartType;
+  }
+  if (isValidScannerFilter(savedDesktopUiState.scannerFilter)) {
+    state.scannerFilter = savedDesktopUiState.scannerFilter;
+  }
+  if (typeof savedDesktopUiState.scannerQuery === 'string') {
+    state.scannerQuery = savedDesktopUiState.scannerQuery;
+  }
+  applyDesktopLayoutState(savedDesktopUiState.layout);
+
   // Initialize theme
   applyTheme(getStoredTheme());
 
@@ -4034,6 +4281,8 @@ const init = async () => {
   initKeyboardShortcuts();
   initWebSocket();
   initResizable();
+  initPanelCollapseControls();
+  syncDesktopUiFromState();
   renderAlerts();
   renderWatchlistTabs();
   renderScanner();
@@ -4063,6 +4312,7 @@ const init = async () => {
     }
   });
   window.addEventListener('online', forceRefresh);
+  window.addEventListener('beforeunload', saveDesktopUiState);
   window.refreshIntervals = refreshIntervals;
 };
 
@@ -4203,6 +4453,7 @@ const setTimeframe = (tf) => {
   });
   state.timeframe = tf;
   loadChart(state.currentSymbol, tf);
+  scheduleDesktopUiStateSave();
 };
 
 // Initialize theme on load

@@ -26,4 +26,5 @@ if (isVercel) {
   process.exit(0);
 }
 
+run(process.execPath, ['scripts/generate-icons.cjs']);
 run('electron-builder', []);

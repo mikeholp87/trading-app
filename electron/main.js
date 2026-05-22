@@ -1,38 +1,54 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, Tray } = require('electron');
+const fs = require('fs');
 const path = require('path');
+const { createAppIcon } = require('./icon');
+
+const appIcon = createAppIcon();
 
 let mainWindow;
 let tray;
 let serverProcess;
+let windowStateSaveTimer;
 
-function createAppIcon() {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-      <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#0d1526"/>
-          <stop offset="100%" stop-color="#13233f"/>
-        </linearGradient>
-      </defs>
-      <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#bg)"/>
-      <rect x="6" y="6" width="52" height="52" rx="12" fill="none" stroke="#2ecc71" stroke-width="2" opacity="0.35"/>
-      <path
-        d="M37.5 16.5c-2.3-1.2-5.1-1.8-8.3-1.8-3.4 0-6.2.8-8.4 2.4-2.1 1.6-3.2 3.8-3.2 6.5 0 2.2.7 4 2.2 5.4 1.4 1.4 3.7 2.6 6.8 3.5l4.1 1.2c2 .6 3.4 1.2 4.1 1.8.8.6 1.2 1.4 1.2 2.4 0 1.1-.5 2-1.5 2.7-1 .8-2.5 1.1-4.4 1.1-2 0-3.9-.4-5.7-1.2l-1.7-.8-3.2 5.2 1.4.8c2.6 1.4 5.7 2.2 9.2 2.3v5.7h5.2v-5.8c3.1-.4 5.6-1.4 7.4-3.1 2-1.8 3-4.1 3-6.9 0-2.4-.8-4.4-2.4-5.8-1.5-1.4-4-2.6-7.3-3.5l-3.8-1.1c-1.8-.5-3.1-1-3.9-1.5-.8-.5-1.1-1.2-1.1-2.1 0-.9.4-1.7 1.3-2.3.9-.6 2.2-.9 4-.9 1.7 0 3.4.3 5 .9l1.8.7 2.8-5.3-1.5-.8c-1.2-.6-2.5-1.1-3.9-1.4v-5h-5.2v5.1z"
-        fill="#2ecc71"
-      />
-    </svg>
-  `;
+const getWindowStatePath = () => path.join(app.getPath('userData'), 'window-state.json');
 
-  return nativeImage.createFromDataURL(
-    `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-  );
-}
+const loadWindowState = () => {
+  try {
+    return JSON.parse(fs.readFileSync(getWindowStatePath(), 'utf8'));
+  } catch (error) {
+    return {};
+  }
+};
 
-function createWindow() {
-  const appIcon = createAppIcon();
-  mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+const saveWindowState = () => {
+  if (!mainWindow) return;
+
+  const bounds = mainWindow.getBounds();
+  const windowState = {
+    ...bounds,
+    isMaximized: mainWindow.isMaximized(),
+    isFullScreen: mainWindow.isFullScreen()
+  };
+
+  try {
+    fs.writeFileSync(getWindowStatePath(), JSON.stringify(windowState));
+  } catch (error) {
+    console.error('[Window] Failed to save window state:', error.message);
+  }
+};
+
+const scheduleWindowStateSave = () => {
+  clearTimeout(windowStateSaveTimer);
+  windowStateSaveTimer = setTimeout(saveWindowState, 150);
+};
+
+const getBrowserWindowOptions = () => {
+  const savedState = loadWindowState();
+  return {
+    width: savedState.width || 1400,
+    height: savedState.height || 900,
+    x: typeof savedState.x === 'number' ? savedState.x : undefined,
+    y: typeof savedState.y === 'number' ? savedState.y : undefined,
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0a0e1a',
@@ -42,13 +58,33 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     }
-  });
+  };
+};
+
+function createWindow() {
+  const savedState = loadWindowState();
+  mainWindow = new BrowserWindow(getBrowserWindowOptions());
 
   mainWindow.loadURL('http://localhost:3000');
 
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
+
+  if (savedState.isMaximized) {
+    mainWindow.maximize();
+  }
+  if (savedState.isFullScreen) {
+    mainWindow.setFullScreen(true);
+  }
+
+  mainWindow.on('resize', scheduleWindowStateSave);
+  mainWindow.on('move', scheduleWindowStateSave);
+  mainWindow.on('maximize', scheduleWindowStateSave);
+  mainWindow.on('unmaximize', scheduleWindowStateSave);
+  mainWindow.on('enter-full-screen', scheduleWindowStateSave);
+  mainWindow.on('leave-full-screen', scheduleWindowStateSave);
+  mainWindow.on('close', saveWindowState);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -58,8 +94,7 @@ function createWindow() {
 
 function createTray() {
   if (tray) return;
-  const trayIcon = createAppIcon();
-  tray = new Tray(trayIcon);
+  tray = new Tray(appIcon);
   tray.setToolTip('Alpaca Trading Dashboard');
   
   const contextMenu = Menu.buildFromTemplate([
@@ -82,21 +117,26 @@ function openWindow() {
     tray.destroy();
     tray = null;
   }
-  
-  mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 900,
-    minHeight: 600,
-    backgroundColor: '#0a0e1a',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
+
+  mainWindow = new BrowserWindow(getBrowserWindowOptions());
 
   mainWindow.loadURL('http://localhost:3000');
+
+  const savedState = loadWindowState();
+  if (savedState.isMaximized) {
+    mainWindow.maximize();
+  }
+  if (savedState.isFullScreen) {
+    mainWindow.setFullScreen(true);
+  }
+
+  mainWindow.on('resize', scheduleWindowStateSave);
+  mainWindow.on('move', scheduleWindowStateSave);
+  mainWindow.on('maximize', scheduleWindowStateSave);
+  mainWindow.on('unmaximize', scheduleWindowStateSave);
+  mainWindow.on('enter-full-screen', scheduleWindowStateSave);
+  mainWindow.on('leave-full-screen', scheduleWindowStateSave);
+  mainWindow.on('close', saveWindowState);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -140,6 +180,7 @@ function startServer() {
 }
 
 function cleanup() {
+  saveWindowState();
   if (tray) { tray.destroy(); tray = null; }
   if (serverProcess) { serverProcess.kill(); }
 }

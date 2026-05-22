@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            imagemagick_install: sudo apt-get update && sudo apt-get install -y imagemagick
+          - os: windows-latest
+            imagemagick_install: choco install imagemagick --no-progress -y
+          - os: macos-latest
+            imagemagick_install: brew install imagemagick
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install ImageMagick
+        run: ${{ matrix.imagemagick_install }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Verify generated icons are up to date
+        run: npm run check:icons
+
+      - name: Validate Electron packaging
+        run: npm run build:ci

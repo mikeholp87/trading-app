@@ -2,6 +2,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const { createAppIcon } = require('./electron/icon');
 
 let mainWindow;
 let serverProcess;
@@ -52,6 +53,7 @@ const createWindow = async () => {
     minWidth: 1000,
     minHeight: 700,
     backgroundColor: '#0f1419',
+    icon: createAppIcon(),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
