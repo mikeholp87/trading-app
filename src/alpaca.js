@@ -2,9 +2,30 @@ const axios = require('axios');
 
 const API_KEY = process.env.ALPACA_API_KEY;
 const API_SECRET = process.env.ALPACA_SECRET_KEY;
-const BASE_URL = process.env.ALPACA_BASE_URL;
-const DATA_URL = process.env.ALPACA_DATA_URL;
+const DEFAULT_BASE_URL = 'https://paper-api.alpaca.markets';
+const DEFAULT_DATA_URL = 'https://data.alpaca.markets';
+const BASE_URL = process.env.ALPACA_BASE_URL || DEFAULT_BASE_URL;
+const DATA_URL = process.env.ALPACA_DATA_URL || DEFAULT_DATA_URL;
 const USE_BASIC_AUTH = process.env.USE_BASIC_AUTH === 'true';
+
+const normalizeBaseUrl = (value, fallback, name) => {
+  const candidate = (value || fallback || '').trim();
+
+  if (!candidate) {
+    throw new Error(`${name} is not configured`);
+  }
+
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error();
+    }
+
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    throw new Error(`${name} must be a valid http(s) URL. Received: ${candidate}`);
+  }
+};
 
 const createAuthHeaders = () => {
   if (USE_BASIC_AUTH) {
@@ -17,9 +38,24 @@ const createAuthHeaders = () => {
   };
 };
 
+const getConfigWarnings = () => {
+  const warnings = [];
+
+  if (!API_KEY) {
+    warnings.push('ALPACA_API_KEY is not set.');
+  }
+
+  if (!API_SECRET) {
+    warnings.push('ALPACA_SECRET_KEY is not set.');
+  }
+
+  return warnings;
+};
+
 const createClient = (baseUrl = BASE_URL) => {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl, DEFAULT_BASE_URL, 'ALPACA_BASE_URL');
   return axios.create({
-    baseURL: baseUrl,
+    baseURL: normalizedBaseUrl,
     headers: {
       'Content-Type': 'application/json',
       ...createAuthHeaders()
@@ -296,5 +332,6 @@ module.exports = {
   getSnapshots,
   getMovers,
   createClient,
-  createAuthHeaders
+  createAuthHeaders,
+  getConfigWarnings
 };

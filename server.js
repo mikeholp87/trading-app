@@ -11,9 +11,16 @@ const portfolioRoutes = require('./src/routes/portfolio');
 const assetsRoutes = require('./src/routes/assets');
 const activitiesRoutes = require('./src/routes/activities');
 const websocket = require('./src/websocket');
+const alpaca = require('./src/alpaca');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const startupWarnings = alpaca.getConfigWarnings();
+if (startupWarnings.length) {
+  console.warn('[Startup] Alpaca configuration warnings:');
+  startupWarnings.forEach((warning) => console.warn(`[Startup] ${warning}`));
+}
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
